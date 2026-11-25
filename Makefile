@@ -1,4 +1,4 @@
-﻿# Makefile to rebuild SM64 split image
+# Makefile to rebuild SM64 split image
 
 ### Default target ###
 
@@ -234,7 +234,7 @@ ifeq ($(TARGET_WEB),1)
   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_web
 else
   ifeq ($(TARGET_NSP),1)
-	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_nsp
+	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_nsp$(if $(filter 1,$(BENCH)),_bench)
   else
 	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
   endif
@@ -509,6 +509,8 @@ ifeq ($(TARGET_NSP), 1)
   CXX := $(NSP_PREFIX)g++
   OBJDUMP := arm-none-eabi-objdump
   OBJCOPY := arm-none-eabi-objcopy
+  # Use GNU cpp from the toolchain; macOS's `cpp` is clang, which mangles the text/level preprocessing
+  CPP := arm-none-eabi-cpp -P
 endif
 
 PYTHON := python3
@@ -534,6 +536,11 @@ endif
 ifeq ($(TARGET_NSP),1)
 	PLATFORM_CFLAGS := -DTARGET_NSP -I include/ndless
 	PLATFORM_LDFLAGS := -Llib -lnspireio 
+	# `make BENCH=1` builds a self-running benchmark into build/<ver>_nsp_bench (see src/pc/benchmark.c)
+	ifeq ($(BENCH),1)
+		GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+		PLATFORM_CFLAGS += -DBENCHMARK -DGIT_HASH=\"$(GIT_HASH)\"
+	endif
 endif
 
 PLATFORM_CFLAGS += -Wfatal-errors -DNO_SEGMENTED_MEMORY 
@@ -930,3 +937,10 @@ MAKEFLAGS += --no-builtin-rules
 -include $(DEP_FILES)
 
 print-% : ; $(info $* is a $(flavor $*) variable set to [$($*)]) @true
+
+ifeq ($(BENCH),1)
+# Recompile benchmark.c on every bench build so its embedded GIT_HASH stays current
+$(BUILD_DIR)/src/pc/benchmark.o: .FORCE
+.PHONY: .FORCE
+.FORCE:
+endif

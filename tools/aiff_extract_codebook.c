@@ -2,7 +2,7 @@
  * Create an ADPCM codebook either by extracting it from an AIFF section, or
  * by executing tabledesign.
  */
-#define _XOPEN_SOURCE 500
+#define _XOPEN_SOURCE 600 /* 500 hides vsnprintf on macOS */
 #include <unistd.h>
 #include <math.h>
 #include <string.h>
