@@ -17,8 +17,9 @@
 // Changing this makes the game rewrite (and so re-explain) files from older versions on first
 // start, keeping their values; v2 added resolution 80x60, draw_shadows and flat_colors;
 // v3 added sharp_hud and smooth_textures; v4 grouped the settings and merged flat_colors and
-// smooth_textures into textures; v5 replaced sharp_hud with sharp_text (adds menu screens).
-#define CONFIG_HEADER "# Super Mario 64 for TI-Nspire: settings v5"
+// smooth_textures into textures; v5 replaced sharp_hud with sharp_text (adds menu screens);
+// v6 renamed sharp_text back to sharp_hud, with the values off, on and on_and_menus.
+#define CONFIG_HEADER "# Super Mario 64 for TI-Nspire: settings v6"
 
 /*
  * Settings and their defaults (the Balanced preset; everything else off)
@@ -74,7 +75,7 @@ static const struct {
 
 static const char *const res_names[RES_COUNT] = { "320x240", "160x120", "80x60" };
 static const char *const textures_names[TEXTURES_COUNT] = { "flat", "normal", "smooth" };
-static const char *const sharp_text_names[SHARP_TEXT_COUNT] = { "off", "hud", "hud_and_menus" };
+static const char *const sharp_text_names[SHARP_TEXT_COUNT] = { "off", "on", "on_and_menus" };
 
 const char *configfile_resolution_name(unsigned int res) {
     return res < RES_COUNT ? res_names[res] : "?";
@@ -159,14 +160,14 @@ static const struct ConfigOption options[] = {
      .choices = res_names, .max = RES_COUNT,
      .section = "PICTURE",
      .help = "Resolution of the 3D world; lower ones are stretched to fill the\n"
-             "screen. (The HUD and text follow sharp_text below.)\n"
+             "screen. (The HUD follows sharp_hud below.)\n"
              "320x240: full resolution. Sharp, but much slower.\n"
              "160x120: much faster (roughly 2 to 3 times), but blocky.\n"
              "80x60: fastest. Very blocky."},
     {.name = "textures", .type = CONFIG_TYPE_CHOICE, .uintValue = &configTextures,
      .choices = textures_names, .max = TEXTURES_COUNT,
      .help = "normal: textures as in the original, with sharp square pixels.\n"
-             "smooth: filtered textures like on the N64. Much slower.\n"
+             "smooth: textures blurred slightly, like on the N64. Much slower.\n"
              "flat: walls, floors and other solid surfaces in one plain colour each\n"
              "(the average colour of their texture). Much faster; looks like a very\n"
              "early 3D game. Trees, fences, coins, text and the sky stay textured."},
@@ -181,16 +182,16 @@ static const struct ConfigOption options[] = {
     {.name = "draw_shadows", .type = CONFIG_TYPE_BOOL, .boolValue = &configDrawShadows,
      .help = "true: Mario, enemies and items cast shadows.\n"
              "false: no shadows. A little faster, but jumps are harder to judge."},
-    {.name = "sharp_text", .type = CONFIG_TYPE_CHOICE, .uintValue = &configSharpText,
+    {.name = "sharp_hud", .type = CONFIG_TYPE_CHOICE, .uintValue = &configSharpText,
      .choices = sharp_text_names, .max = SHARP_TEXT_COUNT,
-     .help = "Keeps text readable when the 3D world uses a lower resolution.\n"
-             "hud_and_menus: the HUD (lives, coins, stars), dialog boxes and the\n"
-             "pause menu are drawn at the full 320x240, and so are whole menu\n"
-             "screens without Mario (title, file select, star select), which also\n"
-             "use normal textures. Menus are simple, so they stay smooth.\n"
-             "hud: only the HUD, dialog boxes and pause menu.\n"
+     .help = "Keeps the HUD readable when the 3D world uses a lower resolution.\n"
+             "on_and_menus: the HUD (lives, coins, stars, power meter), dialog\n"
+             "boxes and the pause menu are drawn at the full 320x240, and so are\n"
+             "the menu screens (title, file select, star select). Menu screens\n"
+             "never use flat textures; they are simple, so they still run well.\n"
+             "on: only the HUD, dialog boxes and pause menu.\n"
              "off: everything at the 3D world's resolution. A little faster.\n"
-             "No effect at 320x240."},
+             "At 320x240 it only keeps menu screens free of flat textures."},
 #ifndef BENCHMARK
     {.name = "cheat_infinite_health", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatHealth,
      .section = "CHEATS",
@@ -203,8 +204,8 @@ static const struct ConfigOption options[] = {
     {.name = "cheat_infinite_lives", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatLives,
      .help = "true: the life counter stays at 99, so you never get a game over."},
     {.name = "cheat_moon_jump", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatMoonJump,
-     .help = "true: hold the A button in the air and Mario keeps rising.\n"
-             "Let go to fall."},
+     .help = "true: hold the A button (key_a, menu by default) in the air and\n"
+             "Mario keeps rising. Let go to fall."},
     {.name = "cheat_super_speed", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatSuperSpeed,
      .help = "true: Mario covers twice the ground when walking, running or sliding."},
     {.name = "cheat_keep_caps", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatKeepCaps,
@@ -238,9 +239,9 @@ static const struct ConfigOption options[] = {
 static const char *const intro =
     "#\n"
     "# You can change these on the calculator: start the game, and the first\n"
-    "# screen shows the settings (arrow keys to change, tab for the next page,\n"
-    "# Enter to save and play). During play, the settings key (tab) opens the\n"
-    "# same screen.\n"
+    "# screen shows the settings (up/down to choose, left/right to change, tab\n"
+    "# for the next page, Enter to save and play). During play, the settings\n"
+    "# key (tab, unless you changed key_settings) opens the same screen.\n"
     "#\n"
     "# Or edit this file on a computer: copy it from the calculator with the\n"
     "# TI-Nspire software (or TI-Nspire Computer Link), open it in any plain text\n"
@@ -330,9 +331,17 @@ static void parse_line(char *line, bool *has_header) {
         }
         return;
     }
-    if (strcmp(name, "sharp_hud") == 0) { // v3: true/false, now sharp_text
+    // sharp_hud: v3/v4 true/false, v6 off/on/on_and_menus (hud and hud_and_menus are aliases);
+    // sharp_text: v5 off/hud/hud_and_menus
+    if (strcmp(name, "sharp_hud") == 0 || strcmp(name, "sharp_text") == 0) {
         bool on;
-        if (parse_bool(value, &on)) {
+        if (strcmp(value, "on_and_menus") == 0 || strcmp(value, "hud_and_menus") == 0) {
+            configSharpText = SHARP_TEXT_HUD_AND_MENUS;
+        } else if (strcmp(value, "on") == 0 || strcmp(value, "hud") == 0) {
+            configSharpText = SHARP_TEXT_HUD;
+        } else if (strcmp(value, "off") == 0) {
+            configSharpText = SHARP_TEXT_OFF;
+        } else if (parse_bool(value, &on)) {
             configSharpText = on ? SHARP_TEXT_HUD_AND_MENUS : SHARP_TEXT_OFF;
         }
         return;
@@ -451,7 +460,7 @@ static void write_presets(FILE *file) {
         fprintf(file, "#       frameskip %s  resolution %s  textures %s  draw_sky %s\n", fs,
                 res_names[presets[p].res], textures_names[presets[p].textures],
                 presets[p].sky ? "true" : "false");
-        fprintf(file, "#       enable_fog %s  draw_shadows %s  sharp_text %s\n",
+        fprintf(file, "#       enable_fog %s  draw_shadows %s  sharp_hud %s\n",
                 presets[p].fog ? "true" : "false", presets[p].shadows ? "true" : "false",
                 sharp_text_names[presets[p].sharp_text]);
     }
@@ -462,9 +471,10 @@ static void write_presets(FILE *file) {
 #ifndef BENCHMARK
 static void write_controls(FILE *file) {
     write_section(file, "CONTROLS");
-    fputs("# The calculator key for each N64 button. esc (quit) and ctrl (speed\n"
-          "# statistics) are fixed and can't be used. If two buttons share a key,\n"
-          "# that key presses both, but key_settings must have a key of its own.\n"
+    fputs("# The calculator key for each N64 button, and for the settings screen.\n"
+          "# esc (quit) and ctrl (speed info) are fixed and can't be used. If two\n"
+          "# buttons share a key, that key presses both. key_settings must have a\n"
+          "# key of its own; if not, it goes back to tab.\n"
           "# The arrow keys include the touchpad diagonals.\n"
           "# Key names:\n", file);
     char line[80];

@@ -63,8 +63,6 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
             const uint32_t max_skip = configFrameskip == FRAMESKIP_AUTO ? FRAMESKIP_AUTO_MAX : configFrameskip;
             int to_skip = (new_frames > max_skip) ? max_skip : (new_frames - 1);
 
-            uint32_t t0 = tmr_ms();
-
             //printf("Rendering: %lu\nSkipping: %lu\n", new_frames, to_skip);
             for (int i = 0; i < to_skip + 1; ++i) { // render only one frame out of this chunk
                 //printf("skipping: %ld\n", to_skip);
@@ -73,7 +71,11 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
                 fps_overlay_tick();
 
                 if (isKeyPressed(KEY_NSPIRE_ESC)) {
-                    return;
+                    tmr_stop();
+                    if (settings_menu_confirm_quit()) {
+                        return;
+                    }
+                    tmr_start();
                 }
             }
             //printf("tFRAME: %lu\n", tmr_ms() - t0);
@@ -86,42 +88,12 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
                 tmr_start();
             }
 
-            // Status screen / debug
+            // speed info screen; the timer stops so the game doesn't try to catch up
             if (isKeyPressed(KEY_NSPIRE_CTRL)) {
                 tmr_stop();
-                if (!nio_init(console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true))
-                    abort();
-                nio_set_default(console); // nio_printf() below prints to the default console
-
-                uint32_t tDelta = tmr_ms() - t0;
-                float fps = 1000.f / tDelta;
-                uint32_t raster_us = prof_ticks_to_us(gProfFrame.raster_ticks);
-                uint32_t gfx_us = prof_ticks_to_us(gProfFrame.ticks[PROF_GFX]);
-
-                nio_printf("Total elapsed (ms): %lu\n"
-                    "Total frame time (ms): %lu\n"
-                    "FPS, physical: %f\n"
-                    "FPS, virtual: %f\n"
-                    "^ This includes frames skipped\n"
-                    "Frames skipped: %d\n"
-                    "\nLast drawn tick (ms):\n"
-                    "  logic %lu, scene %lu\n"
-                    "  gfx front %lu, raster %lu\n"
-                    "  present %lu\n"
-                    "  tris %lu\n"
-                    "Skipped ticks cost only logic + scene.\n",
-                    tmr_ms(), tDelta, fps, fps * (to_skip + 1), to_skip,
-                    prof_ticks_to_us(gProfFrame.ticks[PROF_LOGIC]) / 1000,
-                    prof_ticks_to_us(gProfFrame.ticks[PROF_SCENE]) / 1000,
-                    (gfx_us - raster_us) / 1000, raster_us / 1000,
-                    prof_ticks_to_us(gProfFrame.ticks[PROF_PRESENT]) / 1000,
-                    (unsigned long) gProfFrame.tris);
-
-                wait_key_pressed();
-                nio_free(console);
+                settings_menu_speed_info(to_skip);
                 tmr_start();
             }
-             
         } // mostly borrowed from dos implementation
 
         frames_prev = frames_now;

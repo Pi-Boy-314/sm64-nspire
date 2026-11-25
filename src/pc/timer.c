@@ -110,8 +110,6 @@ void tmr_init(void) {
     tmr_freq_sec = (v0 - *tmr_val) * (1000 / CALIB_TIME);
     tmr_freq_ms = (v0 - *tmr_val) / CALIB_TIME;
 
-    printf("v0: %lu\nv1: %lu\nfreq: %lu\nms: %lu\n", v0, *tmr_val, tmr_freq_ms, tmr_ms());
-
     tmr_reset();
     tmr_start();
 }

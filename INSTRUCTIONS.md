@@ -32,7 +32,13 @@ The first build takes a while, mostly because the toolchain is compiled from sou
 
 ### Linux or WSL (Windows)
 
-On Windows, install WSL with Ubuntu first (run `wsl --install` in PowerShell and restart). Use the Ubuntu terminal for every command below. To open your Linux home folder in Explorer, run `cd ~` then `explorer.exe .`.
+On Windows, set up WSL with Ubuntu first:
+
+1. Right-click PowerShell in the Start menu and choose **Run as administrator**.
+2. Run `wsl --install`, then restart the computer.
+3. Open **Ubuntu** from the Start menu and pick a username and password.
+
+Use the Ubuntu window for every command below. When Linux asks for your password (for `sudo`), nothing appears as you type. That's normal: type it and press Enter.
 
 Install the build tools:
 
@@ -46,20 +52,23 @@ sudo apt-get install -y git gcc g++ build-essential pkg-config binutils wget pyt
 
 ### macOS
 
-Install the Xcode command line tools and [Homebrew](https://brew.sh), then:
+1. Install the Xcode command line tools, and wait for the installer window to finish:
 
 ```bash
 xcode-select --install
 ```
 
+2. Install [Homebrew](https://brew.sh). At the end it prints "Next steps" with commands to run. Run them, or `brew` won't be found.
+3. Install the build tools:
+
 ```bash
 brew install make gmp mpfr libmpc boost wget python pkg-config texinfo php
 ```
 
-macOS comes with GNU make 3.81, which is too old for this project. Homebrew's `make` is version 4. Put it first on your PATH in every terminal you build from:
+macOS comes with GNU make 3.81, which is too old for this project. Homebrew's `make` is version 4. This line makes the terminal use it (PATH is the list of folders the terminal looks in for programs). It saves the change so every new terminal has it too:
 
 ```bash
-export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
+echo 'export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
 Check it worked: `make --version` should print `GNU Make 4.` or newer.
@@ -80,17 +89,23 @@ git clone --recursive https://github.com/ndless-nspire/Ndless.git
 cd ~/Ndless/ndless-sdk/toolchain && ./build_toolchain.sh
 ```
 
-Then add the toolchain to your PATH and build the Ndless SDK:
+Then add the toolchain to your PATH, saved for every new terminal. On Linux and WSL:
 
 ```bash
-export PATH="$PATH:$HOME/Ndless/ndless-sdk/toolchain/install/bin:$HOME/Ndless/ndless-sdk/bin"
+echo 'export PATH="$PATH:$HOME/Ndless/ndless-sdk/toolchain/install/bin:$HOME/Ndless/ndless-sdk/bin"' >> ~/.bashrc && source ~/.bashrc
 ```
+
+On macOS, the same with `~/.zshrc`:
+
+```bash
+echo 'export PATH="$PATH:$HOME/Ndless/ndless-sdk/toolchain/install/bin:$HOME/Ndless/ndless-sdk/bin"' >> ~/.zshrc && source ~/.zshrc
+```
+
+Now build the Ndless SDK:
 
 ```bash
 cd ~/Ndless && make
 ```
-
-The `export` line only lasts for the current terminal. To make it permanent, add it to the end of `~/.bashrc` (Linux and WSL) or `~/.zshrc` (macOS). On macOS, add the `gnubin` line from step 2 there too.
 
 Check it worked: `nspire-gcc --version` should print a version number.
 
@@ -104,11 +119,11 @@ cd ~
 git clone https://github.com/YOUR-USERNAME/sm64-nsp.git
 ```
 
-Replace `YOUR-USERNAME` with the account that holds this fork.
+Replace `YOUR-USERNAME` with the GitHub account in this page's web address. Or copy the whole link from the green **Code** button.
 
-Copy your ROM into the `sm64-nsp` folder and **rename it to `baserom.us.z64`**. The build looks for exactly that name.
+Open the new folder: `explorer.exe ~/sm64-nsp` on WSL, `open ~/sm64-nsp` on macOS. Copy your ROM into it and **rename it to `baserom.us.z64`**. The build looks for exactly that name.
 
-The ROM has to be the US version in `.z64` format (big-endian). Files ending in `.n64` or `.v64` have their bytes in a different order and must be converted to `.z64` first. The build checks the ROM's SHA-1 checksum and stops with a clear message if it doesn't match.
+The ROM has to be the US version in `.z64` format. Files ending in `.n64` or `.v64` store the data in a different order: convert them to `.z64` with an N64 ROM converter first. The build checks the ROM and stops with a clear message if it's the wrong one.
 
 ## 5. Build the game
 
@@ -116,7 +131,7 @@ The ROM has to be the US version in `.z64` format (big-endian). Files ending in 
 cd ~/sm64-nsp && make -j4
 ```
 
-`-j4` builds 4 files at a time. Use the number of cores your computer has. The first build extracts the game's assets from the ROM, so it takes several minutes.
+`-j4` builds 4 files at a time, which is faster. The first build extracts the game's assets from the ROM, so it takes several minutes.
 
 When it finishes, the game is at:
 
@@ -130,11 +145,11 @@ Run `make clean` to delete the build and start over. Your ROM and the extracted 
 
 1. **Install Ndless** on the calculator, following the instructions on the [Ndless page](https://github.com/ndless-nspire/Ndless) for your model and OS version.
 2. **Make a folder** called `sm64` on the calculator, in My Documents.
-3. **Send `sm64.us.f3dex2.tns`** to that folder with the TI-Nspire software (or TiLP). You can rename it, for example to `sm64.tns`.
+3. **Send `sm64.us.f3dex2.tns`** to that folder with the TI-Nspire software (or TiLP). To find it, open `build/us_nsp`: `explorer.exe ~/sm64-nsp/build/us_nsp` on WSL, `open ~/sm64-nsp/build/us_nsp` on macOS. You can rename it, for example to `sm64.tns`, but keep the `.tns` ending.
 4. **Unplug the USB cable.** The game runs slower while it's connected.
 5. **Open the file** from My Documents to start the game.
 
-If the calculator restarts, for example after a crash or a battery change, Ndless usually has to be installed again before the game will open.
+If the calculator restarts, for example after a crash or a battery change, Ndless stops running. Open the Ndless installer document on the calculator again before opening the game.
 
 ## 7. Play and change settings
 
@@ -142,14 +157,14 @@ The settings screen appears every time the game starts. Press `Enter` to play. D
 
 - Keys `1` to `5` pick a preset, from 1 (fastest) to 5 (best-looking). **3 Balanced** is the default. Try **1 Ultra Performance** if the game feels too slow.
 - `tab` switches between the Settings, Cheats and Controls pages.
-- `0` twice resets everything to the defaults.
-- Press `ctrl` during play for a detailed timing screen.
+- `0` twice resets settings, cheats and keys to the defaults. Nothing is saved until you press `Enter`.
+- During play, `ctrl` shows a speed info screen (press any key to go back), and `esc` asks whether to quit (Enter: yes).
 
 The game saves your progress to `sm64_save.bin.tns` and your settings to `sm64_config.txt.tns`, both in the same folder as the game. Every setting, preset, cheat and control is explained in [docs/SETTINGS.md](docs/SETTINGS.md).
 
 ## 8. Updating to a newer version
 
-1. Get the new code: `git pull` in the `sm64-nsp` folder.
+1. Get the new code: `cd ~/sm64-nsp && git pull`
 2. Build again with `make -j4`. Only the changed files are rebuilt.
 3. Send the new `.tns` to the calculator, replacing the old one.
 
@@ -173,9 +188,9 @@ Install the build as in [step 6](#6-put-it-on-the-calculator) and check:
 
 - The game starts, and the title screen, file select and star select look right.
 - Enter a level (Bob-omb Battlefield is a good one). Dialog boxes, the HUD and the pause menu are readable.
-- Open the settings with `tab` during play, change the resolution and a preset, and go back. The game continues without a crash, and `ctrl` still opens the timing screen.
+- Open the settings with `tab` during play, change the resolution and a preset, and go back. The game continues without a crash, and `ctrl` still opens the speed info screen.
 - Try presets 1 and 5, and fog on and off.
-- Quit with `esc`, then open another app (a Calculator document, say). It should open normally. If it doesn't, memory is leaking.
+- Quit with `esc`, then `Enter`, and open another app (a Calculator document, say). It should open normally. If it doesn't, memory is leaking.
 - Turn on the FPS counter (Settings page) and note the frame rate at the same spot before and after your change.
 
 For repeatable speed numbers on a calculator, build the benchmark with `make BENCH=1`. It plays one of the game's demos by itself and reports where the time goes. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
@@ -222,11 +237,25 @@ This builds the benchmark with the calculator's own compiler and runs it in [QEM
 
 Install QEMU with `brew install qemu` (macOS) or `sudo apt-get install qemu-system-arm` (Linux).
 
+As in the picture check, measure the "before" code first, then your change:
+
+```bash
+git stash
+```
+
+```bash
+make ARMSIM=1 -j4 && tools/bench/armbench.sh before
+```
+
+```bash
+git stash pop
+```
+
 ```bash
 make ARMSIM=1 -j4 && tools/bench/armbench.sh after
 ```
 
-Run the same for the "before" code, as in the picture check, then compare:
+Then compare:
 
 ```bash
 python3 tools/bench/sum.py before after
@@ -265,7 +294,8 @@ Then run `build_asan/us_nsp_host/sm64.us.f3dex2` from a folder with a benchmark 
 |---|---|
 | `Failed to open baserom.us.z64!` or `Failed to extract assets` | The ROM is missing or misnamed. Put it in the `sm64-nsp` folder, named exactly `baserom.us.z64`. |
 | `baserom.us.z64 has the wrong hash!` | The ROM isn't the US `.z64` version, or it's byte-swapped (`.n64` / `.v64`). Convert it to `.z64`, or use a US ROM. |
-| `nspire-gcc: command not found` or `arm-none-eabi-gcc: No such file` | The toolchain isn't on your PATH in this terminal. Run the `export PATH=...` line from [step 3](#3-build-the-ndless-toolchain), or add it to `~/.bashrc` / `~/.zshrc`. |
+| `nspire-gcc: command not found` or `arm-none-eabi-gcc: No such file` | The toolchain isn't on your PATH. Run the `echo 'export PATH=...` line from [step 3](#3-build-the-ndless-toolchain) for your system, then open a new terminal. |
+| On macOS: `brew: command not found` | Run the "Next steps" commands Homebrew printed when it finished installing, then open a new terminal. |
 | On macOS: odd errors, missing files, or the build skips asset extraction | You're using macOS's make 3.81. Check `make --version`. Run the `gnubin` line from [step 2](#macos). |
 | `./build_toolchain.sh` fails partway through | Usually a missing package. Check the list in [step 2](#2-set-up-your-computer), install what's missing, and run it again. |
 | The build fails after `git pull` | Run `make clean`, then `make -j4`. |
@@ -275,12 +305,13 @@ Then run `build_asan/us_nsp_host/sm64.us.f3dex2` from a folder with a benchmark 
 
 | Problem | Fix |
 |---|---|
-| Opening the game gives a compatibility or "not supported" error | Ndless isn't running, which is normal after a restart. Install Ndless again. If that doesn't help, restart with the reset button on the back, then install Ndless again. |
-| The calculator freezes | Press the reset button on the back, install Ndless again, and start the game. If it happens at the same spot every time, note the level and the settings you used. |
+| Opening the game gives a compatibility or "not supported" error | Ndless isn't running, which is normal after a restart. Open the Ndless installer document again. If that doesn't help, restart with the reset button on the back, then install Ndless again. |
+| The calculator freezes | Press the reset button on the back, open the Ndless installer again, and start the game. If it happens at the same spot every time, note the level and the settings you used. |
 | The game is very slow | Press `tab`, then `1` for Ultra Performance, or `2`. Unplug the USB cable. A CX II is faster than an original CX. |
+| The game doesn't appear in My Documents, or won't open | The file must end in `.tns`. If you renamed it, add `.tns` back. |
 | The game runs in slow motion | Frame skip is off. Set it to Auto on the settings screen. |
 | Other apps won't open after quitting, or full resolution crashes after a few levels | Older builds leaked memory. Restart the calculator and install this version. |
-| Text is hard to read at low resolution | Set Sharp text to "HUD + menus" on the settings screen. |
+| Text is hard to read at low resolution | Set Sharp HUD to "On + menus" on the settings screen. |
 | Keys do the wrong thing, or you can't get out of a key change | On the settings screen, press `0` twice to reset everything. You can also delete `sm64_config.txt.tns` and the game makes a new one. |
 | Edits to `sm64_config.txt.tns` are ignored | The file must keep its exact name and sit in the same folder as the game. |
 | Your save is gone after updating | The save is `sm64_save.bin.tns` in the game's folder. Keep it there when replacing the game, and keep a copy on your computer. |
@@ -294,4 +325,4 @@ Then run `build_asan/us_nsp_host/sm64.us.f3dex2` from a folder with a benchmark 
 | `qemu-system-arm: command not found` | Install QEMU (see [Speed check](#speed-check-make-armsim1)). |
 | A script prints `FAIL ...` | Read `run.log` in that run's folder under `bench-work/`. |
 | `agg.py` stops with `FileNotFoundError` | One of the two runs is missing or failed. Run `hostbench.sh` again for that name. |
-| `profile.sh` can't build its plugin | It needs QEMU's development files (glib). Homebrew's QEMU includes them. On Linux, install `libglib2.0-dev`. |
+| `profile.sh` can't build its plugin | It needs QEMU's development files (glib). Homebrew's QEMU includes them. On Linux, install `libglib2.0-dev`. It also needs the Ndless toolchain on your PATH. |

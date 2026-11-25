@@ -22,6 +22,7 @@
 
 static uint32_t window_start_ms;
 static uint32_t window_frames, window_ticks;
+static uint32_t last_frames, last_ticks, last_ms; // the last full window, for the speed info screen
 static char text[TEXT_MAX] = "";
 
 // 5x7 glyphs, one byte per row, bit 4 = leftmost pixel
@@ -60,31 +61,36 @@ void fps_overlay_tick(void) {
     window_ticks++;
 }
 
-void fps_overlay_draw(uint16_t *screen) {
-    if (!configShowFps) {
-        window_frames = window_ticks = 0;
-        window_start_ms = tmr_ms();
-        text[0] = '\0';
-        return;
-    }
+bool fps_overlay_last(uint32_t *frames, uint32_t *ticks, uint32_t *ms) {
+    *frames = last_frames;
+    *ticks = last_ticks;
+    *ms = last_ms;
+    return last_ms > 0;
+}
 
+void fps_overlay_draw(uint16_t *screen) {
+    // measured all the time, so the speed info screen has numbers even with the counter off
     window_frames++;
     const uint32_t now = tmr_ms();
     const uint32_t elapsed = now - window_start_ms;
-    if (elapsed >= 1000 || text[0] == '\0') {
-        if (elapsed > 0 && window_frames > 1) {
-            // frames drawn per second, to one decimal; game speed in percent of 30 ticks/s
-            const uint32_t fps10 = (window_frames * 10000u + elapsed / 2) / elapsed;
-            const uint32_t speed = (window_ticks * 100000u / 30u + elapsed / 2) / elapsed;
-            snprintf(text, sizeof(text), "%lu.%lu FPS %lu%%", (unsigned long) (fps10 / 10),
-                     (unsigned long) (fps10 % 10), (unsigned long) speed);
-        } else {
-            snprintf(text, sizeof(text), "- FPS"); // first second: nothing measured yet
-        }
-        if (elapsed >= 1000) {
-            window_start_ms = now;
-            window_frames = window_ticks = 0;
-        }
+    if (elapsed >= 1000) {
+        last_frames = window_frames;
+        last_ticks = window_ticks;
+        last_ms = elapsed;
+        window_start_ms = now;
+        window_frames = window_ticks = 0;
+        // frames drawn per second, to one decimal; game speed in percent of 30 ticks/s.
+        // One frame in a window is enough: below 1 fps the window just runs longer.
+        const uint32_t fps10 = (last_frames * 10000u + elapsed / 2) / elapsed;
+        const uint32_t speed = (last_ticks * 100000u / 30u + elapsed / 2) / elapsed;
+        snprintf(text, sizeof(text), "%lu.%lu FPS %lu%%", (unsigned long) (fps10 / 10),
+                 (unsigned long) (fps10 % 10), (unsigned long) speed);
+    }
+    if (!configShowFps) {
+        return;
+    }
+    if (text[0] == '\0') {
+        snprintf(text, sizeof(text), "- FPS"); // first second: nothing measured yet
     }
 
     int len = 0;

@@ -13,6 +13,11 @@
 #include <libndls.h>
 #include <nspireio/nspireio.h>
 
+#include "fps_overlay.h"
+#include "profiling.h"
+#include "timer.h"
+#include "gfx/gfx_backend.h"
+
 #define LINE_W 52 // console is 53 columns; a full 53 would wrap
 #define HELP_LINES 4
 
@@ -31,26 +36,26 @@ struct Item {
 
 static const struct Item settings_items[] = {
     { "Frame skip", NULL, FRAMESKIP,
-      "Keeps the game at full speed by skipping the\n"
-      "drawing of some frames. Auto skips only as many\n"
-      "as needed (best for most). Off draws every frame,\n"
-      "but slow motion when busy. 1-30: skip at most N.",
+      "Keeps the game at full speed by not drawing some\n"
+      "frames. Auto skips only as many as needed (best).\n"
+      "Off draws every frame, so busy scenes go slow.\n"
+      "At most 1-30: skip up to that many in a row.",
       "SPEED" },
     { "FPS counter", &configShowFps, PLAIN,
       "Shows frames drawn per second and game speed in\n"
       "the bottom-left corner. 100% is full speed, lower\n"
-      "is slow motion." },
+      "is slow motion. Presets don't change it." },
     { "3D resolution", NULL, RESOLUTION,
-      "Resolution of the 3D world, stretched to the\n"
-      "screen. 320x240 is sharp but slow, 160x120 much\n"
-      "faster but blocky, 80x60 fastest and very blocky.\n"
-      "Text and HUD follow the Sharp HUD setting.",
+      "Resolution of the 3D world (lower ones are\n"
+      "stretched). 320x240 is sharp but slow, 160x120\n"
+      "much faster but blocky, 80x60 fastest and very\n"
+      "blocky. The HUD follows the Sharp HUD setting.",
       "PICTURE" },
     { "Textures", NULL, TEXTURES,
-      "Normal: as in the original. Smooth: filtered like\n"
-      "the N64, much slower. Flat: walls and floors in\n"
-      "one colour each, much faster (trees, coins, text\n"
-      "and the sky keep their textures)." },
+      "Flat: solid surfaces in one colour each, much\n"
+      "faster (trees, coins, text and the sky keep their\n"
+      "textures). Normal: as in the original. Smooth:\n"
+      "blurred slightly like the N64, much slower." },
     { "Sky", &configDrawSky, PLAIN,
       "Off shows a plain black sky. Faster, because the\n"
       "sky covers a big part of the screen." },
@@ -61,11 +66,11 @@ static const struct Item settings_items[] = {
     { "Shadows", &configDrawShadows, PLAIN,
       "Shadows under Mario, enemies and items. Off is a\n"
       "little faster, but jumps are harder to judge." },
-    { "Sharp text", NULL, SHARP_TEXT,
-      "Readable text at low resolutions. HUD: HUD, dialog\n"
-      "boxes and pause menu at full 320x240. HUD + menus:\n"
-      "also whole menu screens (title, file and star\n"
-      "select). Off is a little faster." },
+    { "Sharp HUD", NULL, SHARP_TEXT,
+      "Keeps the HUD (lives, coins, stars), dialogs and\n"
+      "pause menu sharp at low 3D resolution. On + menus:\n"
+      "also the title, file and star select screens.\n"
+      "Off is a little faster." },
 };
 
 static const struct Item cheat_items[] = {
@@ -76,8 +81,8 @@ static const struct Item cheat_items[] = {
     { "Infinite lives", &configCheatLives, PLAIN,
       "Lives stay at 99, so no game over." },
     { "Moon jump", &configCheatMoonJump, PLAIN,
-      "Hold the A button in the air and Mario keeps\n"
-      "rising. Let go to fall." },
+      "Hold the A button (menu key by default) in the\n"
+      "air and Mario keeps rising. Let go to fall." },
     { "Super speed", &configCheatSuperSpeed, PLAIN,
       "Mario covers twice the ground when walking,\n"
       "running or sliding." },
@@ -95,10 +100,28 @@ static const struct Item cheat_items[] = {
 #define N_SETTINGS ((int) (sizeof(settings_items) / sizeof(settings_items[0])))
 #define N_CHEATS ((int) (sizeof(cheat_items) / sizeof(cheat_items[0])))
 
+// first help line on the Controls page: what the selected button does in the game
+static const char *const control_use[CONTROL_COUNT] = {
+    [CONTROL_A] = "A button: jump, swim, read signs.",
+    [CONTROL_B] = "B button: punch, kick, dive, pick things up.",
+    [CONTROL_Z] = "Z trigger: crouch; in the air, ground pound.",
+    [CONTROL_R] = "R trigger: switch camera (Mario or Lakitu).",
+    [CONTROL_START] = "Start: pause the game.",
+    [CONTROL_C_UP] = "C up: look around (first person).",
+    [CONTROL_C_DOWN] = "C down: move the camera back.",
+    [CONTROL_C_LEFT] = "C left: turn the camera.",
+    [CONTROL_C_RIGHT] = "C right: turn the camera.",
+    [CONTROL_STICK_UP] = "Stick: walk and run.",
+    [CONTROL_STICK_DOWN] = "Stick: walk and run.",
+    [CONTROL_STICK_LEFT] = "Stick: walk and run.",
+    [CONTROL_STICK_RIGHT] = "Stick: walk and run.",
+    [CONTROL_SETTINGS] = "Settings: opens this screen during play.",
+};
+
 static const char *const controls_help =
     "Press left or right, then the new key. Esc cancels.\n"
-    "Esc (quit) and ctrl (statistics) can't be used.\n"
-    "A key already in use swaps with this one.";
+    "A key already in use swaps with this one.\n"
+    "esc (quit) and ctrl (speed info) can't be used.";
 
 // remembered while the game runs, so the screen reopens where it was left
 static int page = PAGE_SETTINGS;
@@ -163,7 +186,7 @@ static void item_value(const struct Item *it, char *buf, size_t size) {
             break;
         }
         case SHARP_TEXT: {
-            static const char *const names[SHARP_TEXT_COUNT] = { "Off", "HUD", "HUD + menus" };
+            static const char *const names[SHARP_TEXT_COUNT] = { "Off", "On", "On + menus" };
             snprintf(buf, size, "%s", names[configSharpText % SHARP_TEXT_COUNT]);
             break;
         }
@@ -223,14 +246,45 @@ static void item_change(const struct Item *it, int dir) {
     }
 }
 
+// Screen rows, the same on every page: header, list, help box, status, footer.
+#define HELP_ROW 19   // first help line (a rule above and below)
+static int cur_row;   // rows printed so far
+
 static void put_line(const char *s) {
     nio_printf("%-*.*s\n", LINE_W, LINE_W, s);
+    cur_row++;
 }
 
-static void put_help(nio_console *console, const char *help) {
+static void pad_to(int row) {
+    while (cur_row < row - 1) {
+        put_line("");
+    }
+}
+
+static void put_heading(nio_console *console, const char *s) {
+    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLUE);
+    put_line(s);
+    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLACK);
+}
+
+static void put_rule(nio_console *console) {
+    char rule[LINE_W + 1];
+    memset(rule, '-', LINE_W);
+    rule[LINE_W] = '\0';
+    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_GRAY);
+    put_line(rule);
+    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLACK);
+}
+
+// first: an optional line shown before help (Controls page: what the button does)
+static void put_help(nio_console *console, const char *first, const char *help) {
     int lines = 0;
     char line[LINE_W + 1];
-    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_GRAY);
+    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_LIGHTBLACK);
+    if (first != NULL) {
+        put_line(first);
+        lines++;
+    }
     for (const char *p = help; *p != '\0' && lines < HELP_LINES; lines++) {
         const char *nl = strchr(p, '\n');
         const size_t n = nl != NULL ? (size_t) (nl - p) : strlen(p);
@@ -244,11 +298,30 @@ static void put_help(nio_console *console, const char *help) {
     }
 }
 
+// one row of the preset bar: presets first..last, the active one highlighted
+static void put_presets(nio_console *console, int first, int last, const char *tail) {
+    const enum ConfigPreset now = configfile_current_preset();
+    int used = nio_printf(" ");
+    for (int p = first; p <= last; p++) {
+        if (p == (int) now) {
+            nio_color(console, NIO_COLOR_BLUE, NIO_COLOR_WHITE);
+        }
+        used += nio_printf("%d %s", p + 1, configPresetNames[p]);
+        nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLACK);
+        used += nio_printf("  ");
+    }
+    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_LIGHTBLACK);
+    nio_printf("%-*s\n", LINE_W - used, tail);
+    nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLACK);
+    cur_row++;
+}
+
 static void draw(nio_console *console, bool paused, const char *status) {
     char line[LINE_W + 1], value[24];
 
     nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLACK);
     nio_clear(console);
+    cur_row = 0;
     put_line(paused ? "SUPER MARIO 64 - paused" : "SUPER MARIO 64 for TI-Nspire");
 
     // page bar: the current page highlighted
@@ -262,7 +335,22 @@ static void draw(nio_console *console, bool paused, const char *status) {
         used += nio_printf(" ");
     }
     nio_printf("%*s\n", LINE_W - used, "tab: next page");
+    cur_row++;
     put_line("");
+
+    if (page == PAGE_SETTINGS) {
+        put_heading(console, "PRESETS (keys 1 to 5)");
+        put_presets(console, PRESET_ULTRA_PERFORMANCE, PRESET_BALANCED, "");
+        put_presets(console, PRESET_QUALITY, PRESET_ULTRA_QUALITY,
+                    configfile_current_preset() == PRESET_CUSTOM ? "Now: your own mix" : "");
+    } else if (page == PAGE_CHEATS) {
+        int on = 0;
+        for (int i = 0; i < N_CHEATS; i++) {
+            on += *cheat_items[i].flag;
+        }
+        snprintf(line, sizeof(line), "CHEATS (%d on)", on);
+        put_heading(console, line);
+    }
 
     const int rows = page_rows(page);
     for (int row = 0; row < rows; row++) {
@@ -273,7 +361,7 @@ static void draw(nio_console *console, bool paused, const char *status) {
         } else {
             const struct Item *it = page == PAGE_SETTINGS ? &settings_items[row] : &cheat_items[row];
             if (it->group != NULL) {
-                put_line(it->group);
+                put_heading(console, it->group);
             }
             name = it->name;
             item_value(it, value, sizeof(value));
@@ -285,34 +373,32 @@ static void draw(nio_console *console, bool paused, const char *status) {
         put_line(line);
         nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLACK);
     }
-    put_line("");
 
+    pad_to(HELP_ROW - 1);
+    put_rule(console);
     if (page == PAGE_SETTINGS) {
-        put_line("Presets: 1 Ultra Performance  2 Performance");
-        put_line("         3 Balanced  4 Quality  5 Ultra Quality");
-        const enum ConfigPreset preset = configfile_current_preset();
-        snprintf(line, sizeof(line), "Now: %s",
-                 preset == PRESET_CUSTOM ? "Custom" : configPresetNames[preset]);
-        put_line(line);
-        put_line("");
-        put_help(console, settings_items[sel[page]].help);
+        put_help(console, NULL, settings_items[sel[page]].help);
     } else if (page == PAGE_CHEATS) {
-        put_help(console, cheat_items[sel[page]].help);
+        put_help(console, NULL, cheat_items[sel[page]].help);
     } else {
-        put_help(console, controls_help);
+        put_help(console, control_use[sel[page]], controls_help);
     }
+    put_rule(console);
 
-    put_line("");
-    put_line(page == PAGE_CONTROLS ? "up/down: choose   left/right: set a new key"
-                                   : "up/down: choose   left/right: change");
-    put_line("0: reset everything to defaults");
-    put_line(paused ? "Enter: save and go back   Esc: undo changes"
-                    : "Enter: save and play      Esc: quit");
+    // status row: always there, so the footer never moves
     if (status != NULL) {
-        nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_RED);
+        nio_color(console, NIO_COLOR_RED, NIO_COLOR_WHITE);
         put_line(status);
         nio_color(console, NIO_COLOR_WHITE, NIO_COLOR_BLACK);
+    } else {
+        put_line("");
     }
+    put_line(page == PAGE_SETTINGS  ? "up/down: choose   left/right: change   1-5: preset"
+             : page == PAGE_CHEATS ? "up/down: choose   left/right: turn on or off"
+                                   : "up/down: choose   left/right: set a new key");
+    put_line("0 twice: reset settings, cheats and keys");
+    put_line(paused ? "Enter: save and go back       Esc: undo and go back"
+                    : "Enter: save and play                       Esc: quit");
 }
 
 // The menu's own key waits: they also see the touchpad arrows, which any_key_pressed() may not.
@@ -358,6 +444,169 @@ static const char *capture_key(nio_console *console, bool paused) {
     return NULL;
 }
 
+// ---- speed info screen (ctrl during play) ----
+
+// "12.3" from microseconds
+static void put_ms(char *buf, size_t size, uint32_t us) {
+    snprintf(buf, size, "%lu.%lu", (unsigned long) (us / 1000), (unsigned long) (us % 1000 / 100));
+}
+
+static void put_stage(const char *name, uint32_t us, uint32_t total_us) {
+    char line[LINE_W + 1], ms[16], bar[11];
+    const uint32_t pct = total_us > 0 ? (uint32_t) ((uint64_t) us * 100 / total_us) : 0;
+    const int n = (int) ((pct + 5) / 10);
+    memset(bar, '#', n);
+    bar[n] = '\0';
+    put_ms(ms, sizeof(ms), us);
+    snprintf(line, sizeof(line), "  %-18s %6s ms %3lu%%  %s", name, ms, (unsigned long) pct, bar);
+    put_line(line);
+}
+
+void settings_menu_speed_info(int skipped) {
+    static const char *const textures[TEXTURES_COUNT] = { "flat", "normal", "smooth" };
+    static const char *const sharp[SHARP_TEXT_COUNT] = { "off", "on", "on + menus" };
+    nio_console console;
+    nio_console *const prev_default = nio_get_default();
+    if (!nio_init(&console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true)) {
+        return;
+    }
+    nio_set_default(&console);
+    nio_clear(&console);
+    cur_row = 0;
+    char line[LINE_W + 1], a[24];
+
+    put_line("SUPER MARIO 64 - speed info");
+    put_line("");
+
+    // SPEED: the last full second, from the FPS counter's measurement
+    put_heading(&console, "SPEED (last second)");
+    uint32_t frames, ticks, ms;
+    if (fps_overlay_last(&frames, &ticks, &ms)) {
+        const uint32_t fps10 = (frames * 10000u + ms / 2) / ms;
+        const uint32_t speed = (ticks * 100000u / 30u + ms / 2) / ms;
+        snprintf(line, sizeof(line), "  Frames drawn      %lu.%lu per second", (unsigned long) (fps10 / 10),
+                 (unsigned long) (fps10 % 10));
+        put_line(line);
+        snprintf(line, sizeof(line), "  Game speed        %lu%% %s", (unsigned long) speed,
+                 speed >= 95 ? "(full speed)" : "(slow motion)");
+        put_line(line);
+        if (ticks > frames) {
+            snprintf(line, sizeof(line), "  Frames skipped    %lu of every %lu", (unsigned long) (ticks - frames),
+                     (unsigned long) ticks);
+        } else {
+            snprintf(line, sizeof(line), "  Frames skipped    none");
+        }
+        put_line(line);
+    } else {
+        put_line("  Not measured yet: play for a second first.");
+        put_line("");
+        put_line("");
+    }
+    put_line("");
+
+    // TIME PER DRAWN FRAME: the last drawn frame, split into stages
+    const uint32_t logic = prof_ticks_to_us(gProfFrame.ticks[PROF_LOGIC]);
+    const uint32_t scene = prof_ticks_to_us(gProfFrame.ticks[PROF_SCENE]);
+    const uint32_t gfx = prof_ticks_to_us(gProfFrame.ticks[PROF_GFX]);
+    const uint32_t raster = prof_ticks_to_us(gProfFrame.raster_ticks);
+    const uint32_t present = prof_ticks_to_us(gProfFrame.ticks[PROF_PRESENT]);
+    const uint32_t total = logic + scene + gfx + present;
+    put_ms(a, sizeof(a), total);
+    snprintf(line, sizeof(line), "LAST DRAWN FRAME              %8s ms total", a);
+    put_heading(&console, line);
+    put_stage("Game logic", logic, total);
+    put_stage("Scene setup", scene, total);
+    put_stage("3D setup", gfx > raster ? gfx - raster : 0, total);
+    put_stage("Drawing triangles", raster, total);
+    put_stage("Copy to screen", present, total);
+    snprintf(line, sizeof(line), "  Triangles         %lu", (unsigned long) gProfFrame.tris);
+    put_line(line);
+    snprintf(line, sizeof(line), "  Skipped frames: %d. They cost only logic + scene.", skipped);
+    put_line(line);
+    put_line("");
+
+    // SETTINGS
+    const enum ConfigPreset preset = configfile_current_preset();
+    snprintf(line, sizeof(line), "SETTINGS                 preset: %s",
+             preset == PRESET_CUSTOM ? "your own mix" : configPresetNames[preset]);
+    put_heading(&console, line);
+    snprintf(line, sizeof(line), "  %s, %s textures, sky %s, fog %s,",
+             configfile_resolution_name(configResolution), textures[configTextures % TEXTURES_COUNT],
+             configDrawSky ? "on" : "off", configEnableFog ? "on" : "off");
+    put_line(line);
+    if (configFrameskip == FRAMESKIP_AUTO) {
+        snprintf(a, sizeof(a), "Auto");
+    } else if (configFrameskip == 0) {
+        snprintf(a, sizeof(a), "off");
+    } else {
+        snprintf(a, sizeof(a), "at most %u", configFrameskip);
+    }
+    snprintf(line, sizeof(line), "  shadows %s, Sharp HUD %s", configDrawShadows ? "on" : "off",
+             sharp[configSharpText % SHARP_TEXT_COUNT]);
+    put_line(line);
+    snprintf(line, sizeof(line), "  Frame skip        %s", a);
+    put_line(line);
+    snprintf(line, sizeof(line), "  Texture memory    %lu KB of 1536 KB",
+             (unsigned long) (gfx_soft_texture_bytes() / 1024));
+    put_line(line);
+    put_line("");
+
+    // SESSION
+    put_heading(&console, "SESSION");
+    const uint32_t secs = tmr_ms() / 1000;
+    snprintf(line, sizeof(line), "  Play time         %lu:%02lu:%02lu", (unsigned long) (secs / 3600),
+             (unsigned long) (secs / 60 % 60), (unsigned long) (secs % 60));
+    put_line(line);
+    snprintf(line, sizeof(line), "  Calculator        TI-Nspire %s", is_cx2 ? "CX II" : "CX");
+    put_line(line);
+    // cheats that are on, by name, cut to the line
+    int on = 0;
+    snprintf(line, sizeof(line), "  Cheats            ");
+    for (int i = 0; i < N_CHEATS; i++) {
+        if (*cheat_items[i].flag) {
+            const size_t len = strlen(line);
+            snprintf(line + len, sizeof(line) - len, "%s%s", on > 0 ? ", " : "", cheat_items[i].name);
+            on++;
+        }
+    }
+    if (on == 0) {
+        snprintf(line + strlen(line), sizeof(line) - strlen(line), "none");
+    }
+    put_line(line);
+    put_line("");
+    put_line("Press any key to go back to the game.");
+
+    wait_key_pressed(); // waits for ctrl to be let go first
+    wait_no_key_pressed(); // and this key, so the game doesn't get it
+    nio_free(&console);
+    nio_set_default(prev_default);
+}
+
+bool settings_menu_confirm_quit(void) {
+    nio_console console;
+    nio_console *const prev_default = nio_get_default();
+    if (!nio_init(&console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true)) {
+        return true;
+    }
+    nio_set_default(&console);
+    nio_clear(&console);
+    cur_row = 0;
+    put_line("SUPER MARIO 64 - paused");
+    put_line("");
+    put_heading(&console, "Quit the game?");
+    put_line("");
+    put_line("Anything you haven't saved in the game is lost.");
+    put_line("");
+    put_line("Enter: quit          any other key: keep playing");
+
+    wait_key_pressed(); // waits for esc to be let go first
+    const bool quit = isKeyPressed(KEY_NSPIRE_ENTER) || isKeyPressed(KEY_NSPIRE_RET);
+    wait_no_key_pressed();
+    nio_free(&console);
+    nio_set_default(prev_default);
+    return quit;
+}
+
 // Runs the screen. Returns true on Enter (changes kept and saved), false on Esc.
 static bool run(bool paused) {
     nio_console console;
@@ -386,7 +635,7 @@ static bool run(bool paused) {
             snapshot_take(&now);
             if (!snapshot_equal(&before, &now) && !configfile_save(CONFIG_FILE)) {
                 // keep the new settings anyway; they just won't be there next time
-                draw(&console, paused, "Could not save the settings. Press a key.");
+                draw(&console, paused, "Not saved; changes last until you quit. Press a key.");
                 wait_release();
                 wait_press();
             }
@@ -459,6 +708,14 @@ bool settings_menu_run(void) {
 }
 
 void settings_menu_run_paused(void) {
+}
+
+void settings_menu_speed_info(int skipped) {
+    (void) skipped;
+}
+
+bool settings_menu_confirm_quit(void) {
+    return true;
 }
 
 #endif

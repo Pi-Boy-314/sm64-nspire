@@ -24,7 +24,7 @@ It also covers testing changes and fixes for common problems.
 
 Still slow, but much less so than before. The game logic always runs at its real speed: by default the calculator skips drawing frames it can't keep up with.
 
-- **On a real calculator**, the Ultra Performance preset runs the start of Bob-omb Battlefield at about 10.7 fps, against 5.8 fps at 160x120 with the sky on (the Balanced preset, measured before sharp text was added).
+- **On a real calculator**, the Ultra Performance preset runs the start of Bob-omb Battlefield at about 10.7 fps, against 5.8 fps at 160x120 with the sky on (the Balanced preset, measured before Sharp HUD was added).
 - **At the same settings**, the renderer needs about 2.8 times fewer instructions per frame at 160x120, and 3.9 times fewer at 320x240, than the original port. These figures were measured in an emulator: see [Testing](INSTRUCTIONS.md#testing-your-changes).
 
 Pick a preset on the settings screen (keys 1 to 5) to trade picture quality for speed.
@@ -39,9 +39,10 @@ Pick a preset on the settings screen (keys 1 to 5) to trade picture quality for 
 | Z | `doc` |
 | R | `shift` |
 | Start | `enter` |
-| C buttons | `8` `2` `4` `6` |
+| C up, down, left, right | `8`, `2`, `4`, `6` |
 | Settings screen | `tab` |
-| Quit | `esc` |
+| Quit | `esc`, then `enter` |
+| Speed info | `ctrl` |
 
 Every key can be changed on the Controls page of the settings screen. See [docs/SETTINGS.md](docs/SETTINGS.md) for every setting, preset and cheat.
 
@@ -50,7 +51,7 @@ Every key can be changed on the Controls page of the settings screen. See [docs/
 - **Faster renderer:** integer maths instead of slow software floating point, fast paths for the most common surfaces, and no extra work on surfaces that don't need blending.
 - **Settings screen:** shown at start and opened during play with `tab`. Changes apply straight away, including resolution.
 - **Presets** from Ultra Performance to Ultra Quality, and **automatic frame skip** that keeps the game at full speed.
-- **New picture options:** an 80x60 resolution, flat-colour textures, a shadows toggle, and sharp text so the HUD and menus stay readable at low resolution.
+- **New picture options:** an 80x60 resolution, flat-colour textures, a shadows toggle, and Sharp HUD, which keeps the HUD and menus readable at low resolution.
 - **Remappable controls**, **cheats** (infinite health, moon jump and more), and an **FPS counter**.
 - **Fixes:** memory leaks (other apps failed to load after quitting, and full resolution could run out of memory) and a crash when pressing `ctrl` after leaving the settings screen.
 - **Builds on macOS** as well as Linux and WSL.

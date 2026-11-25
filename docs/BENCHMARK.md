@@ -22,7 +22,7 @@ The results are shown on screen and saved next to the game as `sm64_bench.txt.tn
 
 | Option | Default | Meaning |
 |---|---|---|
-| `bench_demo` | 0 | Which attract demo to play |
+| `bench_demo` | 0 | Which attract demo to play, `0` to `3` |
 | `bench_warmup` | 30 | Ticks drawn but not measured (skips the fade-in) |
 | `bench_ticks` | 600 | Max ticks measured; stops earlier if the demo ends |
 | `bench_dump_frames` | false | Save ticks 60/240/420 as `sm64_bench_NNN.ppm.tns` images |
@@ -40,7 +40,7 @@ The results are shown on screen and saved next to the game as `sm64_bench.txt.tn
 
 Skipped frames still pay **logic + scene**; only **gfx** and **present** are skipped. The
 "est. per drawn frame" lines combine these for frameskip 0 and 4, and the percentage is game
-speed relative to the real 30 Hz.
+speed relative to the real 30 ticks a second.
 
 **frame hash** is a checksum of every frame as shown on the LCD. If a change is supposed to
 make things faster without changing the picture, the hash must stay the same. The run is
@@ -63,16 +63,20 @@ say nothing about the calculator; use it to check that a change draws the same p
 
 `make ARMSIM=1` builds the benchmark with the same compiler and flags as the calculator build,
 but for QEMU's `versatilepb` board, which has the same ARM926EJ-S core. Needs QEMU
-(`brew install qemu`). From a folder holding `sm64_config.txt.tns`, run
+(`brew install qemu` on macOS, `sudo apt-get install qemu-system-arm` on Linux). From a folder holding `sm64_config.txt.tns`, run
 `tools/armsim/run.sh`; results go to `sm64_bench.txt.tns` as usual. QEMU's `-icount` ties the
 timer to the instruction count, so every "ms" figure is millions of ARM instructions. Runs are
 exactly repeatable.
 
 For a per-function breakdown, run `tools/armsim/profile.sh` from the same folder (needs
-QEMU's glib, which Homebrew installs with it). It builds a small QEMU plugin, runs the demo for
+QEMU's glib, which Homebrew installs with it, or `libglib2.0-dev` on Linux, and
+`arm-none-eabi-objdump` from the Ndless toolchain on your PATH). It builds a small QEMU plugin, runs the demo for
 100 and 400 ticks, and prints per-tick instructions and estimated ARM926 cycles for the hottest
 functions; add `--annotate NAME` to see one function instruction by instruction.
 
 Instruction counts are a good way to compare two builds, but they aren't time: they leave out
 cache misses, slow memory and multi-cycle instructions such as 64-bit multiplies. Also, the LCD
 blit costs nothing here.
+
+To run all four demos and compare two builds in one go, use the scripts in
+[tools/bench](../tools/bench/README.md).
