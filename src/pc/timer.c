@@ -1,16 +1,39 @@
-#ifdef HOST_BUILD
+#if defined(HOST_BUILD) || defined(ARMSIM_BUILD)
 // Host build: ticks are microseconds from CLOCK_MONOTONIC.
+// ARMSIM build: ticks come from the SP804 timer on QEMU's versatilepb board (1 MHz). Run QEMU
+// with -icount shift=0 (1 instruction = 1 ns) and a tick is exactly 1000 instructions.
 #include <stdio.h>
 #include <time.h>
 #include "timer.h"
 
 static uint64_t sBase, sStopAt;
 static int sRunning;
+#ifdef ARMSIM_BUILD
+static uint64_t now_us(void) {
+    volatile uint32_t *const sp804 = (volatile uint32_t *) 0x101E2000; // load, value, control
+    static int started;
+    static uint32_t last;
+    static uint64_t high;
+    if (!started) {
+        sp804[2] = 0;           // stop
+        sp804[0] = 0xFFFFFFFFu; // count down from the top
+        sp804[2] = 0x82;        // enable, free-running, 32-bit, no prescale, no interrupt
+        started = 1;
+    }
+    const uint32_t t = 0xFFFFFFFFu - sp804[1];
+    if (t < last) {
+        high += 1ull << 32;
+    }
+    last = t;
+    return high | t;
+}
+#else
 static uint64_t now_us(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t) ts.tv_sec * 1000000u + ts.tv_nsec / 1000u;
 }
+#endif
 static uint64_t elapsed_us(void) { return (sRunning ? now_us() : sStopAt) - sBase; }
 
 void tmr_init(void) { tmr_reset(); tmr_start(); }

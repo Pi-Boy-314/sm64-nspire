@@ -58,3 +58,16 @@ clang, using the stand-in Ndless headers in `tools/host_shim/`. Its output is
 plays the demo and writes the same files as the calculator build, plus `sm64_bench_hashes.txt`
 with one hash per frame, so you can find the first frame where two builds differ. Its timings
 say nothing about the calculator; use it to check that a change draws the same picture.
+
+## Counting instructions without a calculator (`make ARMSIM=1`)
+
+`make ARMSIM=1` builds the benchmark with the same compiler and flags as the calculator build,
+but for QEMU's `versatilepb` board, which has the same ARM926EJ-S core. Needs QEMU
+(`brew install qemu`). From a folder holding `sm64_config.txt.tns`, run
+`tools/armsim/run.sh`; results go to `sm64_bench.txt.tns` as usual. QEMU's `-icount` ties the
+timer to the instruction count, so every "ms" figure is millions of ARM instructions. Runs are
+exactly repeatable.
+
+Instruction counts are a good way to compare two builds, but they aren't time: they leave out
+cache misses, slow memory and multi-cycle instructions such as 64-bit multiplies. Also, the LCD
+blit costs nothing here.

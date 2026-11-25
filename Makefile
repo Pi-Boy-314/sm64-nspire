@@ -28,6 +28,9 @@ TARGET_DOS ?= 0
 TARGET_NSP ?= 1
 # HOST=1: headless native build of the NSP code paths (see tools/host_shim); implies BENCH=1
 HOST ?= 0
+# ARMSIM=1: the benchmark built with the calculator's compiler and flags, run on QEMU's ARM926
+# board instead of a calculator (see tools/armsim/run.sh); implies BENCH=1
+ARMSIM ?= 0
 NSP_PREFIX := nspire-
 
 # Compiler to use (ido or gcc)
@@ -236,7 +239,7 @@ ifeq ($(TARGET_WEB),1)
   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_web
 else
   ifeq ($(TARGET_NSP),1)
-	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_nsp$(if $(filter 1,$(BENCH)),_bench)$(if $(filter 1,$(HOST)),_host)
+	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_nsp$(if $(filter 1,$(BENCH)),_bench)$(if $(filter 1,$(HOST)),_host)$(if $(filter 1,$(ARMSIM)),_armsim)
   else
 	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
   endif
@@ -277,6 +280,9 @@ else
 endif
 ifeq ($(TARGET_DOS),1)
   SRC_DIRS += lib/glide3
+endif
+ifeq ($(ARMSIM),1)
+  SRC_DIRS += tools/armsim
 endif
 BIN_DIRS := bin bin/$(VERSION)
 
@@ -518,6 +524,11 @@ ifeq ($(TARGET_NSP), 1)
     LD := clang
     CXX := clang++
   endif
+  ifeq ($(ARMSIM),1)
+    CC := arm-none-eabi-gcc
+    LD := arm-none-eabi-gcc
+    CXX := arm-none-eabi-g++
+  endif
 endif
 
 PYTHON := python3
@@ -552,6 +563,12 @@ ifeq ($(TARGET_NSP),1)
 		GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
 		PLATFORM_CFLAGS := -DTARGET_NSP -DHOST_BUILD -DBENCHMARK -DGIT_HASH=\"$(GIT_HASH)\" -I tools/host_shim -g
 		PLATFORM_LDFLAGS := -lm
+	endif
+	ifeq ($(ARMSIM),1)
+		GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+		# -mcpu and -D_TINSPIRE as nspire-gcc passes them; newlib's semihosting runtime stands in for Ndless
+		PLATFORM_CFLAGS := -mcpu=arm926ej-s -D_TINSPIRE -DTARGET_NSP -DARMSIM_BUILD -DBENCHMARK -DGIT_HASH=\"$(GIT_HASH)\" -I tools/host_shim
+		PLATFORM_LDFLAGS := -mcpu=arm926ej-s --specs=rdimon.specs -lm
 	endif
 endif
 
@@ -667,7 +684,7 @@ ifeq ($(COMPARE),1)
 	@$(SHA1SUM) -c $(TARGET).sha1 || (echo 'The build succeeded, but did not match the official ROM. This is expected if you are making changes to the game.\nTo silence this message, use "make COMPARE=0"'. && false)
 endif
 else
-ifeq ($(HOST),1)
+ifneq ($(filter 1,$(HOST) $(ARMSIM)),)
 all: $(EXE)
 else
 all: $(EXE).tns
@@ -934,8 +951,8 @@ $(EXE).elf: $(O_FILES) $(MIO0_FILES:.mio0=.o) $(ULTRA_O_FILES) $(GODDARD_O_FILES
 
 ZEHNFLAGS := --name "sm64" --uses-lcd-blit 1 --240x320-support 1 --color-support 1 --32MB-support 0 --compress
 
-ifeq ($(HOST),1)
-# Native executable: the .elf link output is already runnable on the host
+ifneq ($(filter 1,$(HOST) $(ARMSIM)),)
+# HOST: native executable. ARMSIM: an ELF that QEMU loads directly.
 $(EXE): $(EXE).elf
 	cp $< $@
 endif
