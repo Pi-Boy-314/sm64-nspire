@@ -725,12 +725,25 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
         d->w = w;
 
         if (configEnableFog && (rsp.geometry_mode & G_FOG)) {
-            w = (w == 0.f) ? 1.f / 0.001f : 1.f / w;
-            const float winv = w < 0.0f ? 32767.0f : w;
-            float fog_z = z * winv * rsp.fog_mul + rsp.fog_offset;
-            if (fog_z < 0) fog_z = 0;
-            if (fog_z > 255) fog_z = 255;
-            d->color.a = fog_z; // Use alpha variable to store fog factor
+            // fog = (z / w) * fog_mul + fog_offset, as in the upstream PC port: |w| < 0.001 is
+            // treated as w = 0.001, and behind the eye (w < 0) 1/w is replaced by 32767.
+            // (This used to assign 1.f / w to a fix64, which always truncated to 0, so fog
+            // never varied with depth.) Inputs are clamped where the result saturates anyway,
+            // so nothing overflows: |zw| <= 40000 times |fog_mul| <= 32768 fits in 31 bits,
+            // and 40000 still exceeds 255 + |fog_offset|, so the clamp never changes the result.
+            const fix64 zw_max = INT_2_FIX(40000);
+            const fix64 thousandth = FIX_ONE / 1000;
+            fix64 zw;
+            if (w > -thousandth && w < thousandth) {
+                zw = (z > INT_2_FIX(64) ? INT_2_FIX(64) : z < -INT_2_FIX(64) ? -INT_2_FIX(64) : z) * 1000;
+            } else if (w < 0) {
+                zw = (z > 2 * FIX_ONE ? 2 * FIX_ONE : z < -2 * FIX_ONE ? -2 * FIX_ONE : z) * 32767;
+            } else {
+                zw = fix_div(z, w);
+            }
+            zw = zw > zw_max ? zw_max : zw < -zw_max ? -zw_max : zw;
+            const int fog_z = (int) FIX_2_INT(zw * rsp.fog_mul) + rsp.fog_offset;
+            d->color.a = fog_z < 0 ? 0 : fog_z > 255 ? 255 : fog_z; // alpha holds the fog factor
         } else {
             d->color.a = v->cn[3];
         }
