@@ -82,5 +82,6 @@ Most folders come from the [SM64 decompilation](https://github.com/n64decomp/sm6
 - [Ndless](https://github.com/ndless-nspire/Ndless): compiling and running programs on the Nspire.
 - [Firebird](https://github.com/nspire-emus/firebird): the Nspire emulator used to test the original port.
 - [Pi-Boy-314](https://github.com/Pi-Boy-314): the idea for the original port.
+- [Pi-Boy-314](https://github.com/Pi-Boy-314) and Claude (Anthropic's AI assistant): this fork's speed-ups, settings screen, tools and docs.
 
 The original port's README also thanks "the almighty God from Whom all blessings flow".

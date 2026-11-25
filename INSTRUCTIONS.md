@@ -116,10 +116,10 @@ cd ~
 ```
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/sm64-nsp.git
+git clone https://github.com/Pi-Boy-314/sm64-nsp.git
 ```
 
-Replace `YOUR-USERNAME` with the GitHub account in this page's web address. Or copy the whole link from the green **Code** button.
+If you're building from a different fork, use its link instead: copy it from the green **Code** button.
 
 Open the new folder: `explorer.exe ~/sm64-nsp` on WSL, `open ~/sm64-nsp` on macOS. Copy your ROM into it and **rename it to `baserom.us.z64`**. The build looks for exactly that name.
 
