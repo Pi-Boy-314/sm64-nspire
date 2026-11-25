@@ -2,6 +2,9 @@
 
 #include "prevent_bss_reordering.h"
 #include "area.h"
+#ifdef TARGET_NSP
+#include "pc/gfx/gfx_frontend.h"
+#endif
 #include "sm64.h"
 #include "gfx_dimensions.h"
 #include "behavior_data.h"
@@ -364,6 +367,10 @@ void play_transition_after_delay(s16 transType, s16 time, u8 red, u8 green, u8 b
 void render_game(void) {
     if (gCurrentArea != NULL && !gWarpTransition.pauseRendering) {
         geo_process_root(gCurrentArea->unk04, D_8032CE74, D_8032CE78, gFBSetColor);
+#ifdef TARGET_NSP
+        // the HUD, text and menus follow: the renderer may draw them at full resolution
+        gDPNoOpTag(gDisplayListHead++, GFX_TAG_HUD_START);
+#endif
 
         gSPViewport(gDisplayListHead++, VIRTUAL_TO_PHYSICAL(&D_8032CF00));
 

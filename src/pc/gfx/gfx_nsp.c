@@ -3,6 +3,8 @@
 
 #include "gfx_window_manager_api.h"
 #include "gfx_backend.h"
+
+extern bool gfx_menu_screen; // gfx_frontend.c: whole menu screen at full resolution
 #include "macros.h"
 #include "nspireio.h"
 
@@ -89,6 +91,7 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
                 tmr_stop();
                 if (!nio_init(console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true))
                     abort();
+                nio_set_default(console); // nio_printf() below prints to the default console
 
                 uint32_t tDelta = tmr_ms() - t0;
                 float fps = 1000.f / tDelta;
@@ -126,13 +129,9 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
 }
 
 void nsp_get_dimensions(uint32_t *width, uint32_t *height) {
-    if (config120pMode) { // quarter the pixel resolution
-        *width = HALF_WIDTH;
-        *height = HALF_HEIGHT;
-    } else {
-        *width = SCREEN_WIDTH;
-        *height = SCREEN_HEIGHT;
-    }
+    const unsigned int res = gfx_menu_screen ? RES_320x240 : configResolution;
+    *width = SCREEN_WIDTH >> res;
+    *height = SCREEN_HEIGHT >> res;
 }
 
 bool nsp_start_frame(void) {
@@ -147,28 +146,67 @@ void nsp_swap_buffers_begin(void) {
     
 }
 
+static inline uint32_t c565_pair(uint32_t c) { // one pixel, twice
+    const uint32_t c16 = c4444_to_c565(c);
+    return c16 | (c16 << 16);
+}
+
+// One row of a lower-resolution picture (w pixels), each pixel drawn f x f (f = 2 or 4).
+// dst is in words (two pixels), SCREEN_WIDTH / 2 words per screen row.
+static inline void present_low_row(uint32_t *dst, const uint32_t *src, int w, int f) {
+    if (f == 2) {
+        for (int x = 0; x < w; x++) {
+            const uint32_t pair = c565_pair(src[x]);
+            dst[x] = pair;
+            dst[x + SCREEN_WIDTH / 2] = pair;
+        }
+    } else {
+        for (int x = 0; x < w; x++) {
+            const uint32_t pair = c565_pair(src[x]);
+            uint32_t *p = dst + 2 * x;
+            p[0] = p[1] = pair;
+            p[SCREEN_WIDTH / 2] = p[SCREEN_WIDTH / 2 + 1] = pair;
+            p[SCREEN_WIDTH] = p[SCREEN_WIDTH + 1] = pair;
+            p[SCREEN_WIDTH * 3 / 2] = p[SCREEN_WIDTH * 3 / 2 + 1] = pair;
+        }
+    }
+}
+
+// rows full-resolution rows
+static inline void present_full_rows(uint32_t *dst, const uint32_t *src, int rows) {
+    for (int i = 0; i < rows * SCREEN_WIDTH / 2; i++, src += 2) {
+        dst[i] = c4444_to_c565(src[0]) | ((uint32_t) c4444_to_c565(src[1]) << 16);
+    }
+}
+
 void nsp_swap_buffers_end(void) {
     // Two RGB565 pixels per word: the ARM is little-endian, so the low half is the left pixel.
     // Writing whole words halves the number of stores compared to 16-bit writes.
     static uint32_t buffer[SCREEN_WIDTH * SCREEN_HEIGHT / 2];
-    const uint32_t *src = gfx_output;
 
-    // populate buffer according to configuration
-    if (config120pMode) {
-        // spread 160 * 120 img to fill whole screen: each pixel becomes a 2*2 square
-        for (int y = 0; y < HALF_HEIGHT; y++) {
-            uint32_t *row0 = buffer + y * SCREEN_WIDTH; // 2 screen rows = SCREEN_WIDTH words
-            uint32_t *row1 = row0 + SCREEN_WIDTH / 2;
-            for (int x = 0; x < HALF_WIDTH; x++) {
-                uint32_t c16 = c4444_to_c565(*src++);
-                uint32_t pair = c16 | (c16 << 16);
-                row0[x] = pair;
-                row1[x] = pair;
+    int f;
+    const uint8_t *hud_rows;
+    const uint32_t *scene = gfx_soft_promoted_scene(&f, &hud_rows);
+    if (scene != NULL) {
+        // sharp HUD: rows the HUD drew on are at full resolution, the rest only in the scene
+        const int w = SCREEN_WIDTH / f;
+        for (int ly = 0; ly < SCREEN_HEIGHT / f; ly++) {
+            uint32_t *dst = buffer + ly * f * (SCREEN_WIDTH / 2);
+            if (hud_rows[ly]) {
+                present_full_rows(dst, gfx_output + ly * f * SCREEN_WIDTH, f);
+            } else {
+                present_low_row(dst, scene + ly * w, w, f);
             }
         }
     } else {
-        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT / 2; i++, src += 2) {
-            buffer[i] = c4444_to_c565(src[0]) | ((uint32_t) c4444_to_c565(src[1]) << 16);
+        const int w = gfx_soft_output_width();
+        f = SCREEN_WIDTH / w;
+        if (f <= 1) {
+            present_full_rows(buffer, gfx_output, SCREEN_HEIGHT);
+        } else {
+            for (int ly = 0; ly < SCREEN_HEIGHT / f; ly++) {
+                present_low_row(buffer + ly * f * (SCREEN_WIDTH / 2), gfx_output + ly * w, w, f);
+            }
         }
     }
 

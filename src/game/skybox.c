@@ -9,6 +9,9 @@
 #include "save_file.h"
 #include "segment2.h"
 #include "sm64.h"
+#ifdef TARGET_NSP
+#include "pc/gfx/gfx_frontend.h"
+#endif
 
 #ifndef TARGET_N64
 # include "pc/configfile.h"
@@ -302,7 +305,7 @@ void *create_skybox_ortho_matrix(s8 player) {
  * Creates the skybox's display list, then draws the 3x3 grid of tiles.
  */
 Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
-    s32 dlCommandCount = 5 + (3 * 3) * 7; // 5 for the start and end, plus 9 skybox tiles
+    s32 dlCommandCount = 5 + (3 * 3) * 7 + 2; // 5 for the start and end, plus 9 skybox tiles, plus the 2 tags
     void *skybox = alloc_display_list(dlCommandCount * sizeof(Gfx));
     Gfx *dlist = skybox;
 
@@ -311,11 +314,17 @@ Gfx *init_skybox_display_list(s8 player, s8 background, s8 colorIndex) {
     } else {
         Mtx *ortho = create_skybox_ortho_matrix(player);
 
+#ifdef TARGET_NSP
+        gDPNoOpTag(dlist++, GFX_TAG_SKY_START); // flat colours leave the sky textured
+#endif
         gSPDisplayList(dlist++, dl_skybox_begin);
         gSPMatrix(dlist++, VIRTUAL_TO_PHYSICAL(ortho), G_MTX_PROJECTION | G_MTX_MUL | G_MTX_NOPUSH);
         gSPDisplayList(dlist++, dl_skybox_tile_tex_settings);
         draw_skybox_tile_grid(&dlist, background, player, colorIndex);
         gSPDisplayList(dlist++, dl_skybox_end);
+#ifdef TARGET_NSP
+        gDPNoOpTag(dlist++, GFX_TAG_SKY_END);
+#endif
         gSPEndDisplayList(dlist);
     }
     return skybox;

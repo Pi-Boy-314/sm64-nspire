@@ -14,17 +14,23 @@
 
 #define ARRAY_LEN(arr) (sizeof(arr) / sizeof(arr[0]))
 
-#define CONFIG_HEADER "# Super Mario 64 for TI-Nspire: settings"
+// Changing this makes the game rewrite (and so re-explain) files from older versions on first
+// start, keeping their values; v2 added resolution 80x60, draw_shadows and flat_colors;
+// v3 added sharp_hud and smooth_textures; v4 grouped the settings and merged flat_colors and
+// smooth_textures into textures; v5 replaced sharp_hud with sharp_text (adds menu screens).
+#define CONFIG_HEADER "# Super Mario 64 for TI-Nspire: settings v5"
 
 /*
  * Settings and their defaults (the Balanced preset; everything else off)
  */
-bool configDrawSky               = true;
-bool configFiltering             = false;
-bool configEnableFog             = false;
-bool config120pMode              = true;
+unsigned int configFrameskip     = FRAMESKIP_AUTO; // most frames in a row skipped to keep game speed
 bool configShowFps               = false;
-unsigned int configFrameskip     = 4; // most frames in a row skipped to keep game speed, or FRAMESKIP_AUTO
+unsigned int configResolution    = RES_160x120;
+unsigned int configTextures      = TEXTURES_NORMAL;
+bool configDrawSky               = true;
+bool configEnableFog             = false;
+bool configDrawShadows           = true;
+unsigned int configSharpText    = SHARP_TEXT_HUD_AND_MENUS;
 
 bool configCheatHealth           = false;
 bool configCheatLives            = false;
@@ -44,32 +50,55 @@ bool         configBenchDump     = false; // write a few frames as .ppm.tns file
 /*
  * Presets
  */
-const char *const configPresetNames[PRESET_COUNT] = { "Performance", "Balanced", "Quality" };
-
-static const struct {
-    bool low_res;
-    unsigned int frameskip;
-    bool sky, fog;
-} presets[PRESET_COUNT] = {
-    [PRESET_PERFORMANCE] = { .low_res = true,  .frameskip = FRAMESKIP_AUTO, .sky = false, .fog = false },
-    [PRESET_BALANCED]    = { .low_res = true,  .frameskip = 4,              .sky = true,  .fog = false },
-    [PRESET_QUALITY]     = { .low_res = false, .frameskip = 2,              .sky = true,  .fog = true  },
+const char *const configPresetNames[PRESET_COUNT] = {
+    "Ultra Performance", "Performance", "Balanced", "Quality", "Ultra Quality",
 };
+
+// Fastest to best-looking. All use auto frameskip: full game speed, skipping drawing as needed.
+static const struct {
+    unsigned int res, frameskip, textures;
+    unsigned int sharp_text;
+    bool sky, fog, shadows;
+} presets[PRESET_COUNT] = {
+    [PRESET_ULTRA_PERFORMANCE] = { RES_80x60,   FRAMESKIP_AUTO, TEXTURES_FLAT,
+                                   .sky = false, .fog = false, .shadows = false, .sharp_text = SHARP_TEXT_HUD_AND_MENUS },
+    [PRESET_PERFORMANCE]       = { RES_160x120, FRAMESKIP_AUTO, TEXTURES_NORMAL,
+                                   .sky = false, .fog = false, .shadows = true,  .sharp_text = SHARP_TEXT_HUD_AND_MENUS },
+    [PRESET_BALANCED]          = { RES_160x120, FRAMESKIP_AUTO, TEXTURES_NORMAL,
+                                   .sky = true,  .fog = false, .shadows = true,  .sharp_text = SHARP_TEXT_HUD_AND_MENUS },
+    [PRESET_QUALITY]           = { RES_320x240, FRAMESKIP_AUTO, TEXTURES_NORMAL,
+                                   .sky = true,  .fog = true,  .shadows = true,  .sharp_text = SHARP_TEXT_HUD_AND_MENUS },
+    [PRESET_ULTRA_QUALITY]     = { RES_320x240, FRAMESKIP_AUTO, TEXTURES_SMOOTH,
+                                   .sky = true,  .fog = true,  .shadows = true,  .sharp_text = SHARP_TEXT_HUD_AND_MENUS },
+};
+
+static const char *const res_names[RES_COUNT] = { "320x240", "160x120", "80x60" };
+static const char *const textures_names[TEXTURES_COUNT] = { "flat", "normal", "smooth" };
+static const char *const sharp_text_names[SHARP_TEXT_COUNT] = { "off", "hud", "hud_and_menus" };
+
+const char *configfile_resolution_name(unsigned int res) {
+    return res < RES_COUNT ? res_names[res] : "?";
+}
 
 void configfile_apply_preset(enum ConfigPreset preset) {
     if (preset >= PRESET_COUNT) {
         return;
     }
-    config120pMode = presets[preset].low_res;
+    configResolution = presets[preset].res;
     configFrameskip = presets[preset].frameskip;
+    configTextures = presets[preset].textures;
     configDrawSky = presets[preset].sky;
     configEnableFog = presets[preset].fog;
+    configDrawShadows = presets[preset].shadows;
+    configSharpText = presets[preset].sharp_text;
 }
 
 enum ConfigPreset configfile_current_preset(void) {
     for (int p = 0; p < PRESET_COUNT; p++) {
-        if (config120pMode == presets[p].low_res && configFrameskip == presets[p].frameskip
-            && configDrawSky == presets[p].sky && configEnableFog == presets[p].fog) {
+        if (configResolution == presets[p].res && configFrameskip == presets[p].frameskip
+            && configDrawSky == presets[p].sky && configEnableFog == presets[p].fog
+            && configDrawShadows == presets[p].shadows && configTextures == presets[p].textures
+            && configSharpText == presets[p].sharp_text) {
             return (enum ConfigPreset) p;
         }
     }
@@ -93,6 +122,7 @@ enum ConfigOptionType {
     CONFIG_TYPE_BOOL,
     CONFIG_TYPE_UINT,
     CONFIG_TYPE_FRAMESKIP, // a number up to FRAMESKIP_MAX, or "auto"
+    CONFIG_TYPE_CHOICE,    // one of the words in choices; the value is its index
 };
 
 struct ConfigOption {
@@ -102,43 +132,66 @@ struct ConfigOption {
         bool *boolValue;
         unsigned int *uintValue;
     };
-    unsigned int max; // largest value accepted (numbers only)
+    unsigned int max; // largest value accepted (numbers), or number of choices
+    const char *const *choices; // CONFIG_TYPE_CHOICE
     const char *section;
     const char *help;
 };
 
 static const struct ConfigOption options[] = {
-    {.name = "enable_120p_mode", .type = CONFIG_TYPE_BOOL, .boolValue = &config120pMode,
-     .section = "SETTINGS",
-     .help = "Resolution.\n"
-             "true: draw at 160x120 and stretch it to fill the screen. Much faster\n"
-             "(roughly 2 to 3 times), but blocky, and small text is hard to read.\n"
-             "false: full 320x240 resolution. Sharp, but much slower."},
     {.name = "frameskip", .type = CONFIG_TYPE_FRAMESKIP, .uintValue = &configFrameskip,
-     .max = FRAMESKIP_MAX,
-     .help = "Frame skipping: the most frames in a row the game may skip drawing to\n"
-             "keep running at its real speed (30 game frames per second).\n"
-             "0 draws every frame, but then the whole game runs in slow motion\n"
-             "whenever the calculator can't keep up. Higher values keep the game\n"
-             "closer to real speed, but movement gets jumpier.\n"
-             "auto skips as many frames as needed for full speed, but at most 10\n"
-             "in a row.\n"
-             "auto, or a number from 0 to 30."},
+     .max = FRAMESKIP_MAX, .section = "SPEED",
+     .help = "Frame skipping. The game runs 30 times a second, but the calculator\n"
+             "usually can't draw that often. Skipping the drawing of some frames\n"
+             "keeps the game at its real speed.\n"
+             "auto (recommended): skip only as many frames as needed to keep full\n"
+             "speed, at most 10 in a row.\n"
+             "0: never skip. Every frame is drawn, but the game runs in slow motion\n"
+             "whenever the calculator can't keep up.\n"
+             "1 to 30: skip at most that many frames in a row."},
+#ifndef BENCHMARK
+    {.name = "show_fps", .type = CONFIG_TYPE_BOOL, .boolValue = &configShowFps,
+     .help = "true: show a counter in the bottom-left corner with the frames drawn\n"
+             "per second (FPS) and the game speed (100% = full speed, lower = slow\n"
+             "motion). Not part of the presets."},
+#endif
+    {.name = "resolution", .type = CONFIG_TYPE_CHOICE, .uintValue = &configResolution,
+     .choices = res_names, .max = RES_COUNT,
+     .section = "PICTURE",
+     .help = "Resolution of the 3D world; lower ones are stretched to fill the\n"
+             "screen. (The HUD and text follow sharp_text below.)\n"
+             "320x240: full resolution. Sharp, but much slower.\n"
+             "160x120: much faster (roughly 2 to 3 times), but blocky.\n"
+             "80x60: fastest. Very blocky."},
+    {.name = "textures", .type = CONFIG_TYPE_CHOICE, .uintValue = &configTextures,
+     .choices = textures_names, .max = TEXTURES_COUNT,
+     .help = "normal: textures as in the original, with sharp square pixels.\n"
+             "smooth: filtered textures like on the N64. Much slower.\n"
+             "flat: walls, floors and other solid surfaces in one plain colour each\n"
+             "(the average colour of their texture). Much faster; looks like a very\n"
+             "early 3D game. Trees, fences, coins, text and the sky stay textured."},
     {.name = "draw_sky", .type = CONFIG_TYPE_BOOL, .boolValue = &configDrawSky,
      .help = "true: draw the sky backgrounds.\n"
              "false: plain black sky. Faster, because the sky covers a large part\n"
              "of the screen in many levels."},
     {.name = "enable_fog", .type = CONFIG_TYPE_BOOL, .boolValue = &configEnableFog,
-     .help = "true: distance fog in the levels that use it (Bowser levels, for\n"
-             "example). Closer to the original look, but fogged areas draw more\n"
-             "slowly.\n"
+     .help = "true: distance fog in the levels that use it. Closer to the original\n"
+             "look, but fogged areas draw more slowly.\n"
              "false: no fog."},
+    {.name = "draw_shadows", .type = CONFIG_TYPE_BOOL, .boolValue = &configDrawShadows,
+     .help = "true: Mario, enemies and items cast shadows.\n"
+             "false: no shadows. A little faster, but jumps are harder to judge."},
+    {.name = "sharp_text", .type = CONFIG_TYPE_CHOICE, .uintValue = &configSharpText,
+     .choices = sharp_text_names, .max = SHARP_TEXT_COUNT,
+     .help = "Keeps text readable when the 3D world uses a lower resolution.\n"
+             "hud_and_menus: the HUD (lives, coins, stars), dialog boxes and the\n"
+             "pause menu are drawn at the full 320x240, and so are whole menu\n"
+             "screens without Mario (title, file select, star select), which also\n"
+             "use normal textures. Menus are simple, so they stay smooth.\n"
+             "hud: only the HUD, dialog boxes and pause menu.\n"
+             "off: everything at the 3D world's resolution. A little faster.\n"
+             "No effect at 320x240."},
 #ifndef BENCHMARK
-    {.name = "show_fps", .type = CONFIG_TYPE_BOOL, .boolValue = &configShowFps,
-     .help = "true: show a counter in the bottom-left corner with the frames drawn\n"
-             "per second (FPS) and the game speed (100% = full N64 speed, lower =\n"
-             "slow motion). Handy for picking a frameskip value. Not part of the\n"
-             "presets."},
     {.name = "cheat_infinite_health", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatHealth,
      .section = "CHEATS",
      .help = "All cheats are off (false) by default. They don't change your save\n"
@@ -269,6 +322,28 @@ static void parse_line(char *line, bool *has_header) {
     if (name == NULL || value == NULL) {
         return;
     }
+    // settings from older versions, now part of textures
+    if (strcmp(name, "flat_colors") == 0 || strcmp(name, "smooth_textures") == 0) {
+        bool on;
+        if (parse_bool(value, &on) && on) {
+            configTextures = name[0] == 'f' ? TEXTURES_FLAT : TEXTURES_SMOOTH;
+        }
+        return;
+    }
+    if (strcmp(name, "sharp_hud") == 0) { // v3: true/false, now sharp_text
+        bool on;
+        if (parse_bool(value, &on)) {
+            configSharpText = on ? SHARP_TEXT_HUD_AND_MENUS : SHARP_TEXT_OFF;
+        }
+        return;
+    }
+    if (strcmp(name, "enable_120p_mode") == 0) { // older files: true = 160x120, false = 320x240
+        bool low;
+        if (parse_bool(value, &low)) {
+            configResolution = low ? RES_160x120 : RES_320x240;
+        }
+        return;
+    }
     for (unsigned int i = 0; i < ARRAY_LEN(options); i++) {
         const struct ConfigOption *o = &options[i];
         if (strcmp(name, o->name) == 0) {
@@ -276,6 +351,12 @@ static void parse_line(char *line, bool *has_header) {
                 parse_bool(value, o->boolValue);
             } else if (o->type == CONFIG_TYPE_FRAMESKIP && strcmp(value, "auto") == 0) {
                 *o->uintValue = FRAMESKIP_AUTO;
+            } else if (o->type == CONFIG_TYPE_CHOICE) {
+                for (unsigned int k = 0; k < o->max; k++) {
+                    if (strcmp(value, o->choices[k]) == 0) {
+                        *o->uintValue = k;
+                    }
+                }
             } else {
                 parse_uint(value, o->max, o->uintValue);
             }
@@ -362,31 +443,22 @@ static void frameskip_text(unsigned int v, char *buf, size_t size) {
 
 static void write_presets(FILE *file) {
     // made from the presets above so it can't go out of date
-    fputs("# Ready-made presets (on the settings screen: keys 1, 2 and 3):\n#\n", file);
-    for (int row = 0; row < 5; row++) {
-        static const char *const names[5] = { "", "enable_120p_mode", "frameskip", "draw_sky", "enable_fog" };
-        char line[128];
-        int n = snprintf(line, sizeof(line), "#   %-18s", names[row]);
-        for (int p = 0; p < PRESET_COUNT; p++) {
-            char cell[16];
-            switch (row) {
-                case 0: snprintf(cell, sizeof(cell), "%s", configPresetNames[p]); break;
-                case 1: snprintf(cell, sizeof(cell), "%s", presets[p].low_res ? "true" : "false"); break;
-                case 2: frameskip_text(presets[p].frameskip, cell, sizeof(cell)); break;
-                case 3: snprintf(cell, sizeof(cell), "%s", presets[p].sky ? "true" : "false"); break;
-                default: snprintf(cell, sizeof(cell), "%s", presets[p].fog ? "true" : "false"); break;
-            }
-            n += snprintf(line + n, sizeof(line) - n, " %-12s", cell);
-        }
-        while (n > 0 && line[n - 1] == ' ') {
-            line[--n] = '\0';
-        }
-        fprintf(file, "%s\n", line);
+    fputs("# Ready-made presets, fastest first (on the settings screen: keys 1 to 5):\n#\n", file);
+    for (int p = 0; p < PRESET_COUNT; p++) {
+        char fs[16];
+        frameskip_text(presets[p].frameskip, fs, sizeof(fs));
+        fprintf(file, "#   %d %s\n", p + 1, configPresetNames[p]);
+        fprintf(file, "#       frameskip %s  resolution %s  textures %s  draw_sky %s\n", fs,
+                res_names[presets[p].res], textures_names[presets[p].textures],
+                presets[p].sky ? "true" : "false");
+        fprintf(file, "#       enable_fog %s  draw_shadows %s  sharp_text %s\n",
+                presets[p].fog ? "true" : "false", presets[p].shadows ? "true" : "false",
+                sharp_text_names[presets[p].sharp_text]);
     }
-    fputs("#\n# Balanced is the default. Performance gives the most speed, Quality the\n"
-          "# best picture. Any mix of values works too.\n", file);
+    fputs("#\n# Balanced is the default. Ultra Performance gets the most speed whatever\n"
+          "# it looks like; Ultra Quality the best picture whatever the speed.\n"
+          "# Any mix of values works too.\n", file);
 }
-
 #ifndef BENCHMARK
 static void write_controls(FILE *file) {
     write_section(file, "CONTROLS");
@@ -439,6 +511,9 @@ bool configfile_save(const char *filename) {
                 break;
             case CONFIG_TYPE_FRAMESKIP:
                 frameskip_text(*o->uintValue, value, sizeof(value));
+                break;
+            case CONFIG_TYPE_CHOICE:
+                snprintf(value, sizeof(value), "%s", o->choices[*o->uintValue % o->max]);
                 break;
             default:
                 snprintf(value, sizeof(value), "%u", *o->uintValue);

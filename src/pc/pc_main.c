@@ -88,4 +88,8 @@ int main(UNUSED int argc, char *argv[]) {
     inited = 1;
 
     wm_api->main_loop(produce_one_frame);
+    // Free the screen and texture buffers and restore the screen now, rather than relying on
+    // the atexit handler; gfx_shutdown() does nothing the second time.
+    gfx_shutdown();
+    return 0;
 }

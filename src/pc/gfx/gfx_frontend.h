@@ -4,6 +4,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// gDPNoOpTag value the game puts in the display list between the 3D scene and the HUD, text
+// and menus; with sharp_hud on, the renderer switches to full resolution there.
+#define GFX_TAG_HUD_START 0x53485544 // "SHUD"
+// gDPNoOpTag values around the sky background
+#define GFX_TAG_SKY_START 0x534B5953 // "SKYS"
+#define GFX_TAG_SKY_END   0x534B5945 // "SKYE"
+
 struct GfxRenderingAPI;
 struct GfxWindowManagerAPI;
 
@@ -13,6 +20,9 @@ struct GfxDimensions {
 };
 
 extern struct GfxDimensions gfx_current_dimensions;
+// Set each frame: a menu screen (no Mario: title, file select, star select, ...) that
+// sharp_text hud_and_menus draws whole at 320x240 with normal textures.
+extern bool gfx_menu_screen;
 
 #ifdef __cplusplus
 extern "C" {

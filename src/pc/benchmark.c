@@ -8,6 +8,7 @@
 // whether a change altered what ends up on screen.
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -105,6 +106,46 @@ static void write_tick_hash(uint32_t tick, uint32_t num_pixels) {
 }
 #endif
 
+#ifdef HOST_BUILD
+// Live view (host build only): if SM64_LIVE names a file or pipe, every drawn frame is written
+// there as raw 320x240 RGBA, e.g. for ffplay -f rawvideo -pixel_format rgba -video_size 320x240.
+static void live_frame(void) {
+    static FILE *f;
+    static bool tried;
+    static uint8_t buf[320 * 240 * 4];
+    if (!tried) {
+        tried = true;
+        const char *path = getenv("SM64_LIVE");
+        if (path != NULL && *path) {
+            f = fopen(path, "wb");
+        }
+    }
+    if (f == NULL) {
+        return;
+    }
+    gfx_soft_promote_finish();
+    const uint32_t ow = gfx_soft_output_width(), oh = ow * SCREEN_HEIGHT / SCREEN_WIDTH;
+    for (uint32_t y = 0; y < 240; y++) {
+        for (uint32_t x = 0; x < 320; x++) {
+            uint32_t c = gfx_output[(y * oh / 240) * ow + x * ow / 320];
+            uint8_t *d = &buf[(y * 320 + x) * 4];
+            d[0] = c & 0xFF;
+            d[1] = (c >> 8) & 0xFF;
+            d[2] = (c >> 16) & 0xFF;
+            d[3] = 0xFF;
+        }
+    }
+    if (fwrite(buf, sizeof(buf), 1, f) != 1) {
+        fclose(f); // viewer closed
+        f = NULL;
+    }
+    fflush(f != NULL ? f : stdout);
+}
+#else
+static void live_frame(void) {
+}
+#endif
+
 static void show_message_and_wait(const char *msg) {
     nio_console console;
     if (!nio_init(&console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true)) {
@@ -117,8 +158,9 @@ static void show_message_and_wait(const char *msg) {
 }
 
 void bench_run(void (*run_one_game_iter)(void), bool *skip_frame) {
-    const uint32_t w = config120pMode ? SCREEN_WIDTH / 2 : SCREEN_WIDTH;
-    const uint32_t h = config120pMode ? SCREEN_HEIGHT / 2 : SCREEN_HEIGHT;
+    // drawing resolution; a frame's final size can be larger (sharp_hud ends it at 320x240)
+    const uint32_t w = SCREEN_WIDTH >> configResolution;
+    const uint32_t h = SCREEN_HEIGHT >> configResolution;
 
     // 1. Boot to the attract demo without drawing (logic only, as fast as possible).
     gDemoInputListID = configBenchDemo;
@@ -142,6 +184,7 @@ void bench_run(void (*run_one_game_iter)(void), bool *skip_frame) {
     *skip_frame = false;
     for (uint32_t i = 0; i < configBenchWarmup && demo_running(); i++) {
         run_one_game_iter();
+        live_frame();
     }
 
     // 3. Measure. Every tick is drawn, so logic and drawing costs are both in every sample.
@@ -166,12 +209,15 @@ void bench_run(void (*run_one_game_iter)(void), bool *skip_frame) {
         }
 
         // Outside the timed region: prof_frame_begin() restarts the clock next tick.
-        hash = hash_frame(hash, w * h);
+        gfx_soft_promote_finish(); // sharp HUD: put the whole frame in gfx_output
+        const uint32_t ow = gfx_soft_output_width(), oh = ow * SCREEN_HEIGHT / SCREEN_WIDTH;
+        hash = hash_frame(hash, ow * oh);
 #ifdef HOST_BUILD
-        write_tick_hash(n, w * h);
+        write_tick_hash(n, ow * oh);
 #endif
+        live_frame();
         if (configBenchDump && (n == 60 || n == 240 || n == 420)) {
-            dump_frame(n, w, h);
+            dump_frame(n, ow, oh);
         }
 
         n++;

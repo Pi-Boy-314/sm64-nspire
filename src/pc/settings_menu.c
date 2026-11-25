@@ -19,36 +19,53 @@
 enum Page { PAGE_SETTINGS, PAGE_CHEATS, PAGE_CONTROLS, PAGE_COUNT };
 static const char *const page_names[PAGE_COUNT] = { "Settings", "Cheats", "Controls" };
 
-enum Special { PLAIN, RESOLUTION, FRAMESKIP };
+enum Special { PLAIN, RESOLUTION, FRAMESKIP, TEXTURES, SHARP_TEXT };
 
 struct Item {
     const char *name;
     bool *flag;           // on/off items
     enum Special special; // items that aren't on/off
     const char *help;     // up to HELP_LINES lines
+    const char *group;    // heading shown above this item, if any
 };
 
 static const struct Item settings_items[] = {
-    { "Resolution", NULL, RESOLUTION,
-      "Low draws 160x120 and stretches it to the screen:\n"
-      "much faster, but blocky and small text is hard to\n"
-      "read. High is the full 320x240: sharp but slow." },
-    { "Frameskip", NULL, FRAMESKIP,
-      "Most frames in a row the game may skip drawing to\n"
-      "keep its real speed. 0 draws every frame (slow\n"
-      "motion when it can't keep up); higher is jumpier.\n"
-      "Auto: as many as needed for full speed (max 10)." },
+    { "Frame skip", NULL, FRAMESKIP,
+      "Keeps the game at full speed by skipping the\n"
+      "drawing of some frames. Auto skips only as many\n"
+      "as needed (best for most). Off draws every frame,\n"
+      "but slow motion when busy. 1-30: skip at most N.",
+      "SPEED" },
+    { "FPS counter", &configShowFps, PLAIN,
+      "Shows frames drawn per second and game speed in\n"
+      "the bottom-left corner. 100% is full speed, lower\n"
+      "is slow motion." },
+    { "3D resolution", NULL, RESOLUTION,
+      "Resolution of the 3D world, stretched to the\n"
+      "screen. 320x240 is sharp but slow, 160x120 much\n"
+      "faster but blocky, 80x60 fastest and very blocky.\n"
+      "Text and HUD follow the Sharp HUD setting.",
+      "PICTURE" },
+    { "Textures", NULL, TEXTURES,
+      "Normal: as in the original. Smooth: filtered like\n"
+      "the N64, much slower. Flat: walls and floors in\n"
+      "one colour each, much faster (trees, coins, text\n"
+      "and the sky keep their textures)." },
     { "Sky", &configDrawSky, PLAIN,
       "Off shows a plain black sky. Faster, because the\n"
       "sky covers a big part of the screen." },
     { "Fog", &configEnableFog, PLAIN,
-      "Distance fog in the levels that use it (Bowser\n"
-      "levels, for example). Closer to the original look\n"
-      "but fogged areas draw more slowly." },
-    { "FPS counter", &configShowFps, PLAIN,
-      "Shows frames per second and game speed in the\n"
-      "bottom-left corner. 100% is full speed, lower is\n"
-      "slow motion. Handy for choosing a frameskip." },
+      "Distance fog in the levels that use it. Closer to\n"
+      "the original look, but fogged areas draw more\n"
+      "slowly." },
+    { "Shadows", &configDrawShadows, PLAIN,
+      "Shadows under Mario, enemies and items. Off is a\n"
+      "little faster, but jumps are harder to judge." },
+    { "Sharp text", NULL, SHARP_TEXT,
+      "Readable text at low resolutions. HUD: HUD, dialog\n"
+      "boxes and pause menu at full 320x240. HUD + menus:\n"
+      "also whole menu screens (title, file and star\n"
+      "select). Off is a little faster." },
 };
 
 static const struct Item cheat_items[] = {
@@ -89,7 +106,7 @@ static int sel[PAGE_COUNT];
 
 // everything the screen can change, to undo (Esc during play) and to save only on changes
 struct Snapshot {
-    bool low_res;
+    unsigned int res, textures, sharp_text;
     unsigned int frameskip;
     bool flags[N_SETTINGS + N_CHEATS];
     int keys[CONTROL_COUNT];
@@ -97,7 +114,9 @@ struct Snapshot {
 
 static void snapshot_take(struct Snapshot *s) {
     memset(s, 0, sizeof(*s));
-    s->low_res = config120pMode;
+    s->res = configResolution;
+    s->textures = configTextures;
+    s->sharp_text = configSharpText;
     s->frameskip = configFrameskip;
     for (int i = 0; i < N_SETTINGS; i++) {
         s->flags[i] = settings_items[i].flag != NULL && *settings_items[i].flag;
@@ -109,7 +128,9 @@ static void snapshot_take(struct Snapshot *s) {
 }
 
 static void snapshot_restore(const struct Snapshot *s) {
-    config120pMode = s->low_res;
+    configResolution = s->res;
+    configTextures = s->textures;
+    configSharpText = s->sharp_text;
     configFrameskip = s->frameskip;
     for (int i = 0; i < N_SETTINGS; i++) {
         if (settings_items[i].flag != NULL) {
@@ -133,13 +154,26 @@ static int page_rows(int p) {
 static void item_value(const struct Item *it, char *buf, size_t size) {
     switch (it->special) {
         case RESOLUTION:
-            snprintf(buf, size, "%s", config120pMode ? "Low (160x120)" : "High (320x240)");
+            snprintf(buf, size, "%s", configfile_resolution_name(configResolution));
             break;
+        case TEXTURES: {
+            static const char *const names[TEXTURES_COUNT] = { "Flat (fastest)", "Normal",
+                                                               "Smooth (slow)" };
+            snprintf(buf, size, "%s", names[configTextures % TEXTURES_COUNT]);
+            break;
+        }
+        case SHARP_TEXT: {
+            static const char *const names[SHARP_TEXT_COUNT] = { "Off", "HUD", "HUD + menus" };
+            snprintf(buf, size, "%s", names[configSharpText % SHARP_TEXT_COUNT]);
+            break;
+        }
         case FRAMESKIP:
             if (configFrameskip == FRAMESKIP_AUTO) {
-                snprintf(buf, size, "Auto");
+                snprintf(buf, size, "Auto (full speed)");
+            } else if (configFrameskip == 0) {
+                snprintf(buf, size, "Off (slow motion)");
             } else {
-                snprintf(buf, size, "%u", configFrameskip);
+                snprintf(buf, size, "At most %u", configFrameskip);
             }
             break;
         default:
@@ -151,8 +185,26 @@ static void item_value(const struct Item *it, char *buf, size_t size) {
 // left (dir -1) or right (+1) on a settings or cheats row. Frameskip order: Auto, 0 .. 30.
 static void item_change(const struct Item *it, int dir) {
     switch (it->special) {
-        case RESOLUTION:
-            config120pMode = !config120pMode;
+        case RESOLUTION: // right: higher resolution (slower, sharper), like Textures
+            if (dir < 0 && configResolution + 1 < RES_COUNT) {
+                configResolution++;
+            } else if (dir > 0 && configResolution > 0) {
+                configResolution--;
+            }
+            break;
+        case SHARP_TEXT: // off, hud, hud + menus
+            if (dir > 0 && configSharpText + 1 < SHARP_TEXT_COUNT) {
+                configSharpText++;
+            } else if (dir < 0 && configSharpText > 0) {
+                configSharpText--;
+            }
+            break;
+        case TEXTURES: // flat, normal, smooth
+            if (dir > 0 && configTextures + 1 < TEXTURES_COUNT) {
+                configTextures++;
+            } else if (dir < 0 && configTextures > 0) {
+                configTextures--;
+            }
             break;
         case FRAMESKIP:
             if (configFrameskip == FRAMESKIP_AUTO) {
@@ -220,6 +272,9 @@ static void draw(nio_console *console, bool paused, const char *status) {
             snprintf(value, sizeof(value), "%s", controls_key_name(controlKeys[row]));
         } else {
             const struct Item *it = page == PAGE_SETTINGS ? &settings_items[row] : &cheat_items[row];
+            if (it->group != NULL) {
+                put_line(it->group);
+            }
             name = it->name;
             item_value(it, value, sizeof(value));
         }
@@ -233,7 +288,8 @@ static void draw(nio_console *console, bool paused, const char *status) {
     put_line("");
 
     if (page == PAGE_SETTINGS) {
-        put_line("Presets: 1 Performance  2 Balanced  3 Quality");
+        put_line("Presets: 1 Ultra Performance  2 Performance");
+        put_line("         3 Balanced  4 Quality  5 Ultra Quality");
         const enum ConfigPreset preset = configfile_current_preset();
         snprintf(line, sizeof(line), "Now: %s",
                  preset == PRESET_CUSTOM ? "Custom" : configPresetNames[preset]);
@@ -305,6 +361,9 @@ static const char *capture_key(nio_console *console, bool paused) {
 // Runs the screen. Returns true on Enter (changes kept and saved), false on Esc.
 static bool run(bool paused) {
     nio_console console;
+    // nio_printf() writes to the default console. This one lives on the stack, so the previous
+    // default must be put back before returning, or later printing writes to freed memory.
+    nio_console *const prev_default = nio_get_default();
     if (!nio_init(&console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true)) {
         return true; // no console: carry on with the current settings
     }
@@ -356,11 +415,15 @@ static bool run(bool paused) {
                 continue; // capture_key already waited for the keys to be let go
             }
         } else if (isKeyPressed(KEY_NSPIRE_1)) {
-            configfile_apply_preset(PRESET_PERFORMANCE);
+            configfile_apply_preset(PRESET_ULTRA_PERFORMANCE);
         } else if (isKeyPressed(KEY_NSPIRE_2)) {
-            configfile_apply_preset(PRESET_BALANCED);
+            configfile_apply_preset(PRESET_PERFORMANCE);
         } else if (isKeyPressed(KEY_NSPIRE_3)) {
+            configfile_apply_preset(PRESET_BALANCED);
+        } else if (isKeyPressed(KEY_NSPIRE_4)) {
             configfile_apply_preset(PRESET_QUALITY);
+        } else if (isKeyPressed(KEY_NSPIRE_5)) {
+            configfile_apply_preset(PRESET_ULTRA_QUALITY);
         } else if (isKeyPressed(KEY_NSPIRE_0)) {
             if (was_armed) {
                 configfile_reset_defaults();
@@ -374,6 +437,7 @@ static bool run(bool paused) {
     }
     wait_release(); // don't let Enter also press Start in the game
     nio_free(&console);
+    nio_set_default(prev_default);
     if (!keep) {
         snapshot_restore(&before);
     }

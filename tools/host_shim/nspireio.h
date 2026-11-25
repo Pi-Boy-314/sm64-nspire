@@ -20,6 +20,7 @@ static inline bool nio_init(nio_console *c, int cols, int rows, int x, int y, in
     return true;
 }
 static inline void nio_set_default(nio_console *c) { (void) c; }
+static inline nio_console *nio_get_default(void) { return 0; }
 static inline void nio_free(nio_console *c) { (void) c; }
 
 #endif

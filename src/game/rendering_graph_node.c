@@ -10,6 +10,7 @@
 #include "rendering_graph_node.h"
 #include "shadow.h"
 #include "sm64.h"
+#include "pc/configfile.h"
 
 /**
  * This file contains the code that processes the scene graph for rendering.
@@ -690,7 +691,10 @@ static void geo_process_shadow(struct GraphNodeShadow *node) {
             }
         }
 
-        shadowList = create_shadow_below_xyz(shadowPos[0], shadowPos[1], shadowPos[2], shadowScale,
+        // draw_shadows off: skip the shadow (and its floor search); the animation bookkeeping
+        // above still runs, since the object's own animation reads it
+        shadowList = !configDrawShadows ? NULL
+                   : create_shadow_below_xyz(shadowPos[0], shadowPos[1], shadowPos[2], shadowScale,
                                              node->shadowSolidity, node->shadowType);
         if (shadowList != NULL) {
             mtx = alloc_display_list(sizeof(*mtx));

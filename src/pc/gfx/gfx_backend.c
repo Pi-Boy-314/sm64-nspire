@@ -18,6 +18,7 @@
 #include "macros.h"
 
 #include "pc/fixed_pt.h"
+#include "pc/configfile.h"
 
 #define ALIGN(x, a) (((x) + (a - 1)) & ~(a - 1))
 
@@ -67,6 +68,7 @@ typedef union Vector4 {
 
 typedef union Color4 {
     struct { uint8_t r, g, b, a; };
+    uint8_t v[4]; // r, g, b, a by index
     uint32_t c;
 } Color4;
 
@@ -108,6 +110,7 @@ struct Texture {
     uint8_t cms, cmt;   // WRAP_* mode per axis (the span drawers wrap inline)
     uint32_t addr;      // offset into texcache
     sample_fn_t sample; // sampling function (does wrapping/clamping)
+    Color4 avg;         // average colour, for flat colours (configFlatColors)
 };
 
 struct Viewport {
@@ -159,6 +162,38 @@ static uint16_t *z_buffer;
 static int scr_width;
 static int scr_height;
 static int scr_size; // scr_width * scr_height
+
+// Sharp HUD (see gfx_soft_promote_to_full_res): after the 3D scene the frame continues at
+// 320x240, but a row of the scene is only stretched into gfx_output when the HUD draws on it.
+// Untouched rows go to the screen straight from the copy of the scene, the cheap way.
+static int promo_f;              // 0, or how much larger the frame became (2 or 4)
+static int promo_w;              // width of the 3D scene
+static uint32_t *promo_scene;    // copy of the 3D scene at its own size
+static uint8_t promo_ready[120]; // scene rows already stretched into gfx_output
+
+// Full-resolution rows y0 .. y1-1 are about to be drawn on: stretch their part of the scene.
+static void promo_expand_rows(int y0, int y1) {
+    y0 = y0 < 0 ? 0 : y0;
+    y1 = y1 > 240 ? 240 : y1;
+    const int f = promo_f, w = promo_w;
+    for (int ly = y0 / f; ly * f < y1; ly++) {
+        if (promo_ready[ly]) {
+            continue;
+        }
+        promo_ready[ly] = 1;
+        uint32_t *dst = gfx_output + ly * f * 320;
+        const uint32_t *src = promo_scene + ly * w;
+        for (int x = 0; x < w; x++) {
+            for (int k = 0; k < f; k++) {
+                dst[x * f + k] = src[x];
+            }
+        }
+        for (int r = 1; r < f; r++) {
+            memcpy(dst + r * 320, dst, 320 * sizeof(uint32_t));
+        }
+    }
+}
+#define PROMO_TOUCH(y0, y1) do { if (promo_f) promo_expand_rows((y0), (y1)); } while (0)
 
 static int num = 0;
 
@@ -319,9 +354,35 @@ static inline Color4 tex_sample_nearest(const struct Texture * const tex, const 
     return tex->sample(tex, x, y);
 }
 
-/* color combiners */
+// Smooth textures (configFiltering, for textures the game asks to filter): blends the four
+// texels around the sample point, like the N64's bilinear filter. Only the per-pixel path
+// filters; while filter_now is set the rasterizer doesn't use the (nearest-only) span drawers.
+static bool filter_now;
 
-#define tex_sample tex_sample_nearest
+static Color4 tex_sample_bilinear(const struct Texture * const tex, const fix64 u, const fix64 v) {
+    const fix64 fx = u * tex->w - FIX_ONE / 2; // texel centres are at +0.5
+    const fix64 fy = v * tex->h - FIX_ONE / 2;
+    const int x = FIX_2_INT(fx), y = FIX_2_INT(fy);
+    const int ax = (int) ((fx >> (FRAC_WIDTH - 8)) & 0xFF), ay = (int) ((fy >> (FRAC_WIDTH - 8)) & 0xFF);
+    const Color4 c00 = tex->sample(tex, x, y), c10 = tex->sample(tex, x + 1, y);
+    const Color4 c01 = tex->sample(tex, x, y + 1), c11 = tex->sample(tex, x + 1, y + 1);
+    Color4 out;
+    for (int i = 0; i < 4; i++) {
+        const int top = c00.v[i] * 256 + (c10.v[i] - c00.v[i]) * ax;
+        const int bottom = c01.v[i] * 256 + (c11.v[i] - c01.v[i]) * ax;
+        out.v[i] = (uint8_t) ((top * 256 + (bottom - top) * ay) >> 16);
+    }
+    return out;
+}
+
+static inline Color4 tex_sample(const struct Texture * const tex, const fix64 u, const fix64 v) {
+    if (filter_now && tex->filter) {
+        return tex_sample_bilinear(tex, u, v);
+    }
+    return tex_sample_nearest(tex, u, v);
+}
+
+/* color combiners */
 
 static Color4 combine_rgb(const fix64 z, const fix64 *props) { // 3
     return (Color4){ { .r = fix_mult_i32(props[0], z),
@@ -783,7 +844,7 @@ DEFINE_SPAN_FUNC(rgba, 0, 4)
     }
 
 #define R_RASTERIZE(tri, nprops) \
-    const span_fn_t span_fn = cur_shader->span; \
+    const span_fn_t span_fn = filter_now ? NULL : cur_shader->span; \
     const fix64 *v0 = (fix64 *) tri.v0; \
     const fix64 *v1 = (fix64 *) tri.v1; \
     const fix64 *v2 = (fix64 *) tri.v2; \
@@ -897,6 +958,9 @@ static inline void pop_triangle(const fix64 *buf, const int stride) {
     if (v0->y > v2->y) { vt = v0; v0 = v2; v2 = vt; }
     if (v1->y > v2->y) { vt = v1; v1 = v2; v2 = vt; }
 
+    // the rasterizer stores row y at scr_height - 1 - y (bottom-up), so these are the rows it
+    // writes, with a row to spare at each end
+    PROMO_TOUCH(scr_height - 2 - (int) FIX_2_INT(v2->y), scr_height + 1 - (int) FIX_2_INT(v0->y));
     const struct Tri out = (struct Tri) { (fix64 *)v0, (fix64 *)v1, (fix64 *)v2 };
     cur_shader->rast(out);
 }
@@ -1096,6 +1160,20 @@ static void gfx_soft_upload_texture(const uint8_t *rgba32_buf, int width, int he
     tex->h = height;
     tex->wrap_w = width - 1;
     tex->wrap_h = height - 1;
+
+    // average of the texels that aren't fully transparent (all of them if every one is)
+    uint32_t sum[4] = { 0 }, sum_all[3] = { 0 };
+    const int n = width * height;
+    for (int i = 0; i < n; i++) {
+        const uint8_t *t = rgba32_buf + 4 * i;
+        sum_all[0] += t[0], sum_all[1] += t[1], sum_all[2] += t[2];
+        if (t[3]) {
+            sum[0] += t[0], sum[1] += t[1], sum[2] += t[2], sum[3]++;
+        }
+    }
+    const uint32_t *s = sum[3] ? sum : sum_all;
+    const uint32_t cnt = sum[3] ? sum[3] : (uint32_t) (n > 0 ? n : 1);
+    tex->avg = (Color4) { { .r = s[0] / cnt, .g = s[1] / cnt, .b = s[2] / cnt, .a = 0xFF } };
 }
 
 static inline int gfx_cm_to_local(uint32_t val) {
@@ -1181,10 +1259,71 @@ static inline void gfx_soft_pick_draw_func(void) {
     draw_fn = draw_funcs[cur_shader->draw_flags | z_write];
 }
 
-static void gfx_soft_draw_triangles(fix64 buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
+// Flat colours (configFlatColors): an opaque textured triangle is drawn untextured instead,
+// in its texture's average colour (times the vertex colour, if the shader has one). Drawing a
+// plain coloured pixel costs about half as much as a textured one.
+// The sky keeps its texture (as one colour per tile it would just be blocks); the game marks
+// it in the display list (GFX_TAG_SKY_START / _END).
+static struct ShaderProgram flat_shader;     // combine_rgb with its span drawer; set up in init
+static struct ShaderProgram flat_fog_shader; // combine_fog_rgb, for fogged surfaces
+static bool in_sky;
+
+static bool use_flat_colors(void) {
+    if (!configFlatColors || in_sky || gfx_menu_screen || cur_shader->draw_flags != 0) {
+        return false;
+    }
+    const combine_fn_t c = cur_shader->combine;
+    return c == combine_tex || c == combine_tex_rgb || c == combine_tex_fog || c == combine_tex_fog_rgb;
+}
+
+static void draw_triangles_flat(const fix64 *buf, size_t num_tris, size_t stride) {
+    const Color4 avg = cur_tex[0]->avg;
+    // a * c / 255 as (a * (c * 257 + 1)) >> 16: exact enough and no 64-bit division
+    const fix64 mr = avg.r * 257 + 1, mg = avg.g * 257 + 1, mb = avg.b * 257 + 1;
+    const combine_fn_t c = cur_shader->combine;
+    // the source props after x, y, z, 1/w: u, v, [fog], [r, g, b]
+    const bool fog = c == combine_tex_fog || c == combine_tex_fog_rgb;
+    const bool shade = c == combine_tex_rgb || c == combine_tex_fog_rgb;
+    const int col = fog ? 7 : 6; // first colour prop
+    const int out = fog ? 5 : 4; // where r, g, b go in the flat vertex (fog before them)
+    struct ShaderProgram *const saved = cur_shader;
+    cur_shader = fog ? &flat_fog_shader : &flat_shader;
     gfx_soft_pick_draw_func();
+    for (size_t t = 0; t < num_tris; t++, buf += 3 * stride) {
+        fix64 v[3][8]; // x, y, z, 1/w, [fog], r, g, b; all props divided by w like the frontend's
+        for (int k = 0; k < 3; k++) {
+            const fix64 *s = buf + k * stride;
+            v[k][0] = s[0], v[k][1] = s[1], v[k][2] = s[2], v[k][3] = s[3];
+            v[k][4] = s[6]; // the fog factor (overwritten by red when there's no fog)
+            if (shade) {
+                v[k][out + 0] = (s[col + 0] * mr) >> 16;
+                v[k][out + 1] = (s[col + 1] * mg) >> 16;
+                v[k][out + 2] = (s[col + 2] * mb) >> 16;
+            } else {
+                v[k][out + 0] = s[3] * avg.r;
+                v[k][out + 1] = s[3] * avg.g;
+                v[k][out + 2] = s[3] * avg.b;
+            }
+        }
+        pop_triangle(&v[0][0], 8);
+    }
+    cur_shader = saved;
+}
+
+void gfx_soft_set_sky(bool sky) {
+    in_sky = sky;
+}
+
+static void gfx_soft_draw_triangles(fix64 buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
     const size_t num_verts = 3 * buf_vbo_num_tris;
     const size_t stride = buf_vbo_len / num_verts; //how many props per vertex
+    if (use_flat_colors()) {
+        filter_now = false;
+        draw_triangles_flat(buf_vbo, buf_vbo_num_tris, stride);
+        return;
+    }
+    filter_now = cur_shader->cc.used_textures[0] && cur_tex[0] != NULL && cur_tex[0]->filter;
+    gfx_soft_pick_draw_func();
     for (size_t i = 0; i < num_verts * stride; i += 3 * stride)
         pop_triangle(buf_vbo + i, stride);
 }
@@ -1195,6 +1334,7 @@ static void gfx_soft_fill_rect(int x0, int y0, int x1, int y1, const uint8_t *rg
     y0 = imax(0, y0);
     x1 = imin(scr_width, x1);
     y1 = imin(scr_height, y1);
+    PROMO_TOUCH(y0, y1);
     register const uint32_t color = *(uint32_t *)rgba;
     register uint32_t *base = gfx_output + y0 * scr_width + x0;
     register uint32_t *p;
@@ -1203,6 +1343,29 @@ static void gfx_soft_fill_rect(int x0, int y0, int x1, int y1, const uint8_t *rg
         p = base;
         for (x = x0; x < x1; ++x, ++p)
             *p = color;
+    }
+}
+
+// Texture coordinates of a rectangle (HUD, text) in 16.16 fixed point instead of float steps,
+// which needed software floating point for every pixel. Only used when nothing is negative,
+// where truncating like the float-to-int conversion is a plain shift; the HUD's steps and
+// starting points are short binary fractions, so the result is the same.
+static void gfx_soft_tex_rect_fixed(int x0, int y0, int x1, int y1, int32_t u0, int32_t v0,
+                                    int32_t du, int32_t dv, const bool modulate, const Color4 rgba) {
+    const struct Texture *const tex = cur_tex[0];
+    int base = y0 * scr_width + x0;
+    int32_t v = v0;
+    for (int y = y0; y < y1; ++y, base += scr_width, v += dv) {
+        int idx = base;
+        int32_t u = u0;
+        const int ty = v >> 16;
+        if (modulate) {
+            for (int x = x0; x < x1; ++x, ++idx, u += du)
+                draw_fn(idx, 0, rgba_modulate(tex->sample(tex, u >> 16, ty), rgba));
+        } else {
+            for (int x = x0; x < x1; ++x, ++idx, u += du)
+                draw_fn(idx, 0, tex->sample(tex, u >> 16, ty));
+        }
     }
 }
 
@@ -1239,8 +1402,15 @@ static void gfx_soft_tex_rect(int x0, int y0, int x1, int y1, const float u0, co
     y0 = imax(0, y0);
     x1 = imin(scr_width, x1);
     y1 = imin(scr_height, y1);
+    PROMO_TOUCH(y0, y1);
     gfx_soft_pick_draw_func();
-    if (cur_shader->cc.num_inputs)
+    const int w = x1 - x0, h = y1 - y0;
+    if (u0 >= 0.f && v0 >= 0.f && dudx >= 0.f && dvdy >= 0.f
+        && u0 + dudx * w < 32767.f && v0 + dvdy * h < 32767.f) {
+        gfx_soft_tex_rect_fixed(x0, y0, x1, y1, (int32_t) (u0 * 65536.f), (int32_t) (v0 * 65536.f),
+                                (int32_t) (dudx * 65536.f), (int32_t) (dvdy * 65536.f),
+                                cur_shader->cc.num_inputs != 0, *(Color4 *)rgba);
+    } else if (cur_shader->cc.num_inputs)
         gfx_soft_tex_rect_modulate(x0, y0, x1, y1, u0, v0, dudx, dvdy, *(Color4 *)rgba);
     else
         gfx_soft_tex_rect_replace(x0, y0, x1, y1, u0, v0, dudx, dvdy);
@@ -1284,6 +1454,7 @@ static void gfx_soft_set_resolution(const int width, const int height) {
         }
     }
 
+    promo_f = 0;
     scr_width = width;
     scr_height = height;
     if (scr_width * scr_height > MAX_SCR_SIZE) { // never happens: 320x240 is the largest mode
@@ -1310,10 +1481,23 @@ static void gfx_soft_init(void) {
 
     gfx_soft_prepare_tables();
 
+    flat_shader.combine = combine_rgb;
+    flat_shader.span = span_rgb;
+    flat_shader.rast = GET_RAST_FUNC(7); // x, y, z, 1/w, r, g, b
+    flat_shader.num_props = 3;
+    flat_shader.cc.num_inputs = 1;
+    flat_shader.draw_flags = 0;
+    flat_fog_shader = flat_shader;
+    flat_fog_shader.combine = combine_fog_rgb;
+    flat_fog_shader.span = NULL; // fog has no span drawer
+    flat_fog_shader.rast = GET_RAST_FUNC(8); // x, y, z, 1/w, fog, r, g, b
+    flat_fog_shader.num_props = 4;
+
     gfx_soft_set_resolution(gfx_current_dimensions.width, gfx_current_dimensions.height);
 }
 
 static void gfx_soft_start_frame(void) {
+    in_sky = false;
     // the settings screen can switch resolution during play
     if ((int) gfx_current_dimensions.width != scr_width || (int) gfx_current_dimensions.height != scr_height) {
         gfx_soft_set_resolution(gfx_current_dimensions.width, gfx_current_dimensions.height);
@@ -1323,8 +1507,68 @@ static void gfx_soft_start_frame(void) {
 }
 
 static void gfx_soft_shutdown(void) {
+    // Ndless doesn't free a program's memory when it exits: anything left allocated stays
+    // lost until the calculator restarts, and other programs may then fail to start.
     free(z_buffer);
+    free(gfx_output);
     free(texcache);
+    free(promo_scene);
+    promo_scene = NULL;
+    promo_f = 0;
+    z_buffer = NULL;
+    gfx_output = NULL;
+    texcache = NULL;
+    texcache_size = texcache_addr = 0;
+}
+
+// Sharp HUD: the 3D scene has been drawn at a lower resolution. The rest of the frame (HUD,
+// text, menus) is drawn at 320x240 over a stretched copy of it; see promo_expand_rows.
+void gfx_soft_promote_to_full_res(void) {
+    const int w = scr_width, h = scr_height;
+    if (promo_f || w >= 320 || w <= 0 || 320 % w != 0 || h * (320 / w) != 240) {
+        return;
+    }
+    if (!promo_scene) {
+        promo_scene = malloc(160 * 120 * sizeof(uint32_t)); // the largest scene that's stretched
+        if (!promo_scene) {
+            return; // no memory: the HUD just stays at the low resolution
+        }
+    }
+    memcpy(promo_scene, gfx_output, w * h * sizeof(uint32_t));
+    memset(promo_ready, 0, sizeof(promo_ready));
+    gfx_soft_set_resolution(320, 240); // also clears the depth buffer for the HUD
+    promo_f = 320 / w;
+    promo_w = w;
+}
+
+const uint32_t *gfx_soft_promoted_scene(int *f, const uint8_t **rows_drawn) {
+    if (!promo_f) {
+        return NULL;
+    }
+    *f = promo_f;
+    *rows_drawn = promo_ready;
+    return promo_scene;
+}
+
+void gfx_soft_promote_finish(void) {
+    if (promo_f) {
+        promo_expand_rows(0, 240);
+    }
+}
+
+int gfx_soft_output_width(void) {
+    return scr_width;
+}
+
+uint32_t gfx_soft_texture_bytes(void) {
+    return texcache_addr;
+}
+
+// Forgets every converted texture. The space is reused rather than freed, so the cache
+// stays at its largest size so far instead of growing a little with every new texture.
+// The frontend must forget its texture list at the same time (gfx_texture_cache_clear).
+void gfx_soft_reset_textures(void) {
+    texcache_addr = 0;
 }
 
 static void gfx_soft_on_resize(void) {

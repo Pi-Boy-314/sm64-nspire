@@ -14,6 +14,7 @@
 #include "gfx_cc.h"
 #include "gfx_window_manager_api.h"
 #include "gfx_rendering_api.h"
+#include "gfx_backend.h"
 
 #include "pc/configfile.h"
 #include "pc/timer.h"
@@ -177,6 +178,8 @@ static struct RenderingState {
 } rendering_state;
 
 struct GfxDimensions gfx_current_dimensions;
+bool gfx_menu_screen;
+extern struct Object *gMarioObject; // game/object_list_processor.h; NULL outside real levels
 static float ratio_x = 1.f;
 static float ratio_y = 1.f;
 static float inv_ratio_x = 1.f;
@@ -309,6 +312,26 @@ static bool gfx_texture_cache_lookup(int tile, struct TextureHashmapNode **n, co
     (*node)->siz = siz;
     *n = *node;
     return false;
+}
+
+// The renderer keeps a converted copy of every texture it has seen. Space is never handed
+// back piece by piece, so without this it grows with each new level until memory runs out
+// (sooner at full resolution, whose screen buffers take more memory). Once it passes the
+// limit, everything is dropped at the start of a frame and reconverted as it's used again.
+// One level needs well under the limit, so this happens about once per few level changes.
+#define TEXTURE_MEMORY_LIMIT (1536 * 1024)
+#ifndef TEXTURE_MEMORY_LIMIT_TEST
+#define TEXTURE_MEMORY_LIMIT_TEST TEXTURE_MEMORY_LIMIT
+#endif
+
+static void gfx_texture_cache_trim(void) {
+    if (gfx_soft_texture_bytes() <= TEXTURE_MEMORY_LIMIT_TEST) {
+        return;
+    }
+    gfx_soft_reset_textures();
+    gfx_texture_cache.pool_pos = 0; // every entry is now invalid; texture ids are reused
+    rdp.textures_changed[0] = true;
+    rdp.textures_changed[1] = true;
 }
 
 static void import_texture_rgba16(int tile) {
@@ -1600,6 +1623,8 @@ static inline void *seg_addr(uintptr_t w1) {
 #define C0(pos, width) ((cmd->words.w0 >> (pos)) & ((1U << width) - 1))
 #define C1(pos, width) ((cmd->words.w1 >> (pos)) & ((1U << width) - 1))
 
+static void gfx_hud_start(void);
+
 static void gfx_run_dl(Gfx* cmd) {
     for (;;) {
         uint32_t opcode = cmd->words.w0 >> 24;
@@ -1791,6 +1816,14 @@ static void gfx_run_dl(Gfx* cmd) {
                 gfx_dp_fill_rectangle(C1(12, 12), C1(0, 12), C0(12, 12), C0(0, 12));
                 break;
 #endif
+            case (uint8_t) G_NOOP:
+                if (cmd->words.w1 == GFX_TAG_HUD_START) {
+                    gfx_hud_start();
+                } else if (cmd->words.w1 == GFX_TAG_SKY_START || cmd->words.w1 == GFX_TAG_SKY_END) {
+                    gfx_flush();
+                    gfx_soft_set_sky(cmd->words.w1 == GFX_TAG_SKY_START);
+                }
+                break;
             case G_SETSCISSOR:
                 gfx_dp_set_scissor(C1(24, 2), C0(12, 12), C0(0, 12), C1(12, 12), C1(0, 12));
                 break;
@@ -1867,18 +1900,39 @@ struct GfxRenderingAPI *gfx_get_current_rendering_api(void) {
     return gfx_rapi;
 }
 
-void gfx_start_frame(void) {
-    gfx_wapi->handle_events();
-    gfx_wapi->get_dimensions(&gfx_current_dimensions.width, &gfx_current_dimensions.height);
-    if (gfx_current_dimensions.height == 0) {
-        // Avoid division by zero
-        gfx_current_dimensions.height = 1;
-    }
+static void gfx_update_ratios(void) {
     ratio_x = (float)gfx_current_dimensions.width / (float)SCREEN_WIDTH;
     ratio_y = (float)gfx_current_dimensions.height / (float)SCREEN_HEIGHT;
     inv_ratio_x = (float)SCREEN_WIDTH / (float)gfx_current_dimensions.width;
     inv_ratio_y = (float)SCREEN_HEIGHT / (float)gfx_current_dimensions.height;
     gfx_current_dimensions.aspect_ratio = (float)gfx_current_dimensions.width / (float)gfx_current_dimensions.height;
+}
+
+void gfx_start_frame(void) {
+    gfx_wapi->handle_events();
+    // Menus draw their text inside the scene, before the HUD switch, so the whole screen goes
+    // to full resolution. They are simple, so that stays smooth. Levels always have Mario.
+    gfx_menu_screen = configSharpText == SHARP_TEXT_HUD_AND_MENUS && gMarioObject == NULL;
+    gfx_wapi->get_dimensions(&gfx_current_dimensions.width, &gfx_current_dimensions.height);
+    if (gfx_current_dimensions.height == 0) {
+        // Avoid division by zero
+        gfx_current_dimensions.height = 1;
+    }
+    gfx_update_ratios();
+}
+
+// Sharp HUD (see GFX_TAG_HUD_START): the game sets a new viewport and scissor right after the
+// tag, so they are worked out for the new size.
+static void gfx_hud_start(void) {
+    if (!configSharpHud || gfx_current_dimensions.width >= SCREEN_WIDTH) {
+        return;
+    }
+    gfx_flush();
+    gfx_soft_promote_to_full_res();
+    gfx_current_dimensions.width = SCREEN_WIDTH;
+    gfx_current_dimensions.height = SCREEN_HEIGHT;
+    gfx_update_ratios();
+    rdp.viewport_or_scissor_changed = true;
 }
 
 void gfx_run(Gfx *commands) {
@@ -1893,6 +1947,7 @@ void gfx_run(Gfx *commands) {
     dropped_frame = false;
 
     prof_lap(PROF_LOGIC); // glue between render_game() and here
+    gfx_texture_cache_trim();
     gfx_rapi->start_frame();
     gfx_run_dl(commands);
     gfx_flush();
