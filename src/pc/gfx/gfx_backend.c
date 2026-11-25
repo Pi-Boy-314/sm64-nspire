@@ -86,6 +86,9 @@ typedef void (*draw_fn_t)(const int idx, uint16_t uz, const Color4 src);
 typedef Color4 (*combine_fn_t)(const fix64 z, const fix64 *props);
 // rasterizer: walks the triangle and interpolates a fixed amount of vertex properties
 typedef void (*rast_fn_t)(const struct Tri tri);
+// span drawer: draws pixels x .. x_end-1 of one scanline, given the props at pixel x and their
+// per-pixel steps (dp[i].x); a faster replacement for the per-pixel loop for common shaders
+typedef void (*span_fn_t)(const fix64 *p, const Vector2 *dp, int x, int x_end, int idx);
 
 struct ShaderProgram {
     uint32_t shader_id;
@@ -95,12 +98,14 @@ struct ShaderProgram {
     int num_props;
     combine_fn_t combine;
     rast_fn_t rast;
+    span_fn_t span; // NULL: use the generic per-pixel loop and combine
 };
 
 struct Texture {
     int w, h;           // size
     int wrap_w, wrap_h; // size - 1 for wrapping
     bool filter;        // linear filter
+    uint8_t cms, cmt;   // WRAP_* mode per axis (the span drawers wrap inline)
     uint32_t addr;      // offset into texcache
     sample_fn_t sample; // sampling function (does wrapping/clamping)
 };
@@ -163,6 +168,11 @@ static int num = 0;
 static uint8_t lerp_tab[256][256 * 2 + 1];
 // color component multiplication table: [x][y] = (x * y) / 256;
 static uint8_t mult_tab[256][256];
+// span_recip[n] = 65536 / n, rounded down, for stepping values across a span of n + 1 pixels
+#define SPAN_RECIP_MAX 1024
+static int32_t span_recip[SPAN_RECIP_MAX];
+// span_rcp_tab[i] = round(2^16 / (1 + (i + 0.5) / 1024)): starting point for span_recip32
+static uint16_t span_rcp_tab[1024];
 // dither kernel for unreal texture filtering
 static const Vector2 dither_tab[2][2] = {
     //{ {{ 0.25f, 0.00f }}, {{ 0.50f, 0.75f }} },
@@ -511,6 +521,161 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
     }
 }
 
+/* span drawers
+ * Used instead of the per-pixel loop below for the commonest shaders (texture and/or shade colour,
+ * opaque or alpha blended). Per pixel, everything is 32-bit:
+ * - depth: the same values as the per-pixel loop, stepped as one 64-bit add;
+ * - texture coordinates: perspective-correct per pixel. Texel = (u/w * tex_w) / (1/w); numerator
+ *   and denominator are scaled together into int32 once per span, then one 32-bit reciprocal
+ *   per pixel;
+ * - shade colours: exact (perspective-correct) at the first and last pixel of the span and linear
+ *   in between, as the N64 interpolates shade.
+ * Multiplies replace mult_tab lookups (same results; the 64 KB table thrashes the 16 KB D-cache). */
+
+// colour prop (colour / w) times w, as 8.16 clamped to [0, 256). Same truncation as
+// fix_mult_i32, which the per-pixel combiners use, so the ends match their colours.
+static inline int32_t span_colour(const fix64 pc, fix64 w) {
+    if (w > (1LL << 48)) w = 1LL << 48;
+    const int64_t c = ((pc >> 16) * (w >> 16)) >> 16;
+    return c < 0 ? 0 : c > 0xFFFFFF ? 0xFFFFFF : (int32_t) c;
+}
+
+// (diff / n), rounded toward zero so stepped values stay between the two ends
+static inline int32_t span_step(const int32_t diff, const int n) {
+    if (n <= 0 || n >= SPAN_RECIP_MAX) return 0;
+    const int64_t q = ((int64_t) (diff < 0 ? -diff : diff) * span_recip[n]) >> 16;
+    return diff < 0 ? -(int32_t) q : (int32_t) q;
+}
+
+// m in [2^31, 2^32) -> about 2^61 / m (half of fix_recip32's result, so it fits an int32), to
+// ~22 bits: a 10-bit table, then one Newton-Raphson step, which can be slightly low (like the old
+// per-pixel path's fix_recip, so texels floor the same way). m == 2^31 is exact: with w == 1 (2D,
+// HUD) the denominator is a power of two, and a low result would put integer texel coordinates
+// one texel low.
+static inline int32_t span_recip32(const uint32_t m) {
+    if (m == 0x80000000u) {
+        return 1 << 30;
+    }
+    const uint32_t r0 = (uint32_t) span_rcp_tab[(m >> 21) & 1023] << 15;
+    const uint32_t mr = (uint32_t) (((uint64_t) m * r0) >> 31);
+    return (int32_t) ((((uint64_t) r0 * (0u - mr)) >> 31) >> 1);
+}
+
+// Texture wrap without branches. Per axis and span: mask = size - 1 for repeat, else all ones;
+// mir = -1 for mirror (abs, like imirror0w), else 0; then clamp to [0, size - 1], which is a
+// no-op after a repeat mask.
+static inline int span_wrap(int x, const int mask, const int mir, const int m) {
+    const int s = (x >> 31) & mir;
+    x = ((x ^ s) - s) & mask;
+    x = x < 0 ? 0 : x;
+    return x > m ? m : x;
+}
+
+static inline int span_bits(const int64_t v) { // significant bits of |v|
+    const uint64_t a = v < 0 ? 0 - (uint64_t) v : (uint64_t) v;
+    return a ? 64 - __builtin_clzll(a) : 0;
+}
+
+static inline __attribute__((always_inline)) void span_draw(const fix64 *p, const Vector2 *dp,
+        const int x, const int x_end, int idx, const int tex_on, const int ncol, const int blend) {
+    int len = x_end - x;
+    const int last = len - 1;
+    const bool zt = z_test, zw = z_write;
+    int64_t zz = p[2] * 65535 + z_offset; // FIX_2_INT(p[2] * 65535 + z_offset) per pixel, as before
+    const int64_t dzz = dp[2].x * 65535;
+
+    int32_t c[4] = { 0 }, dc[4] = { 0 };
+    if (ncol) {
+        const int ci = 4 + 2 * tex_on;
+        const fix64 p3_last = p[3] + dp[3].x * last;
+        const fix64 w0 = p[3] == FIX_ONE ? FIX_ONE : fix_recip(p[3]);
+        const fix64 w1 = p3_last == FIX_ONE ? FIX_ONE : fix_recip(p3_last);
+        for (int k = 0; k < ncol; k++) {
+            c[k] = span_colour(p[ci + k], w0);
+            dc[k] = span_step(span_colour(p[ci + k] + dp[ci + k].x * last, w1) - c[k], last);
+        }
+    }
+
+    const struct Texture *t = cur_tex[0];
+    const uint32_t *texels = NULL;
+    int tw = 0, mw = 0, mh = 0, ks = 0, kt = 0, is = 0, it = 0;
+    int32_t nu = 0, nv = 0, d = 0, dnu = 0, dnv = 0, dd = 0;
+    if (tex_on) {
+        texels = (const uint32_t *) (texcache + t->addr);
+        tw = t->w; mw = t->wrap_w; mh = t->wrap_h;
+        ks = t->cms == WRAP_REPEAT ? mw : -1; is = t->cms == WRAP_MIRROR ? -1 : 0;
+        kt = t->cmt == WRAP_REPEAT ? mh : -1; it = t->cmt == WRAP_MIRROR ? -1 : 0;
+        const int64_t nu0 = p[4] * t->w, nv0 = p[5] * t->h, d0 = p[3];
+        const int64_t snu = dp[4].x * t->w, snv = dp[5].x * t->h, sd = dp[3].x;
+        int bits = span_bits(nu0);
+        const int64_t ends[5] = { nu0 + snu * last, nv0, nv0 + snv * last, d0, d0 + sd * last };
+        for (int k = 0; k < 5; k++) bits = imax(bits, span_bits(ends[k]));
+        const int sh = imax(0, bits - 30); // everything below 2^30 after the shift
+        nu = (int32_t) (nu0 >> sh); nv = (int32_t) (nv0 >> sh); d = (int32_t) (d0 >> sh);
+        dnu = (int32_t) (snu >> sh); dnv = (int32_t) (snv >> sh); dd = (int32_t) (sd >> sh);
+    }
+
+    for (; len > 0; --len, ++idx) {
+        const int32_t zi = (int32_t) (zz >> 32);
+        const uint16_t uz = zi < 0 ? 0 : zi > 0xFFFF ? 0xFFFF : (uint16_t) zi;
+        if (!zt || uz <= z_buffer[idx]) {
+            uint32_t r, g, b, a;
+            if (tex_on) {
+                int tx = 0, ty = 0;
+                if (d > 0) {
+                    const int n = __builtin_clz((uint32_t) d); // >= 2
+                    // half of ~2^62 / (d << n), so it fits an int32 and one smull does each product
+                    const int32_t rcp = span_recip32((uint32_t) d << n);
+                    if (n <= 29) { // floor(nu / d) = (nu * rcp) >> (61 - n), from the high word
+                        tx = (int32_t) (((int64_t) nu * rcp) >> 32) >> (29 - n);
+                        ty = (int32_t) (((int64_t) nv * rcp) >> 32) >> (29 - n);
+                    } else {
+                        tx = (int) (((int64_t) nu * rcp) >> (61 - n));
+                        ty = (int) (((int64_t) nv * rcp) >> (61 - n));
+                    }
+                }
+                const Color4 tc = { .c = texels[span_wrap(ty, kt, it, mh) * tw + span_wrap(tx, ks, is, mw)] };
+                if (ncol) {
+                    r = (tc.r * (uint32_t) (c[0] >> 16)) >> 8;
+                    g = (tc.g * (uint32_t) (c[1] >> 16)) >> 8;
+                    b = (tc.b * (uint32_t) (c[2] >> 16)) >> 8;
+                    a = (tc.a * (ncol == 4 ? (uint32_t) (c[3] >> 16) : 0xFF)) >> 8;
+                } else {
+                    r = tc.r; g = tc.g; b = tc.b; a = tc.a;
+                }
+            } else {
+                r = c[0] >> 16; g = c[1] >> 16; b = c[2] >> 16;
+                a = ncol == 4 ? (uint32_t) (c[3] >> 16) : 0xFF;
+            }
+            if (blend) { // draw_pixel_blend
+                const uint32_t dst = gfx_output[idx], ia = 255 - a;
+                r = ((r * a) >> 8) + (((dst & 0xFF) * ia) >> 8);
+                g = ((g * a) >> 8) + ((((dst >> 8) & 0xFF) * ia) >> 8);
+                b = ((b * a) >> 8) + ((((dst >> 16) & 0xFF) * ia) >> 8);
+            }
+            gfx_output[idx] = r | (g << 8) | (b << 16) | (a << 24);
+            if (zw) z_buffer[idx] = uz;
+        }
+        zz += dzz;
+        if (tex_on) { nu += dnu; nv += dnv; d += dd; }
+        _Pragma("GCC unroll 4") for (int k = 0; k < ncol; k++) c[k] += dc[k];
+    }
+}
+
+#define DEFINE_SPAN_FUNC(name, tex_on, ncol) \
+    static void span_ ## name(const fix64 *p, const Vector2 *dp, int x, int x_end, int idx) { \
+        span_draw(p, dp, x, x_end, idx, tex_on, ncol, 0); \
+    } \
+    static void span_ ## name ## _blend(const fix64 *p, const Vector2 *dp, int x, int x_end, int idx) { \
+        span_draw(p, dp, x, x_end, idx, tex_on, ncol, 1); \
+    }
+
+DEFINE_SPAN_FUNC(tex, 1, 0)
+DEFINE_SPAN_FUNC(tex_rgb, 1, 3)
+DEFINE_SPAN_FUNC(tex_rgba, 1, 4)
+DEFINE_SPAN_FUNC(rgb, 0, 3)
+DEFINE_SPAN_FUNC(rgba, 0, 4)
+
 /* rasterizers */
 
 #define R_RASTERIZE_TRI_SEG(y_a, y_b, nprops) \
@@ -527,10 +692,12 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
         x_end = imin(r_clip.x1, FIX_2_INT(x_b)); \
         /* do X subpixel prestepping */ \
         dx = FIX_ONE - (x_a - INT_2_FIX(x)); \
-        _Pragma("GCC unroll 16") for (i = 2; i < nprops; ++i) p[i] = p_a[i] + fix_mult(dx, dp[i].x); \
+        _Pragma("GCC unroll 16") for (i = 2; i < nprops; ++i) p[i] = p_a[i] + fix_mult_frac(dx, dp[i].x); \
         idx = scr_width * (scr_height - y - 1) + x; \
         /* draw scanline from current x_a to current x_b */ \
-         while (x++ < x_end) { \
+        if (span_fn) { \
+            if (x < x_end) span_fn(p, dp, x, x_end, idx); \
+        } else while (x++ < x_end) { \
             uz = u16clamp(FIX_2_INT(p[2] * 65535 + z_offset)); \
             if (!z_test || uz <= z_buffer[idx]) { \
                 /* Improve efficiency here? w is 1 very often */ \
@@ -549,6 +716,7 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
     }
 
 #define R_RASTERIZE(tri, nprops) \
+    const span_fn_t span_fn = cur_shader->span; \
     const fix64 *v0 = (fix64 *) tri.v0; \
     const fix64 *v1 = (fix64 *) tri.v1; \
     const fix64 *v2 = (fix64 *) tri.v2; \
@@ -580,16 +748,16 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
         /* longer edge is on the left */ \
         const fix64 dxdy_a = dxdy_ac; \
         /* first column of this scanline is on AC */ \
-        fix64 x_a = v0[0] + fix_mult(y_pre0, dxdy_a); \
+        fix64 x_a = v0[0] + fix_mult_frac(y_pre0, dxdy_a); \
         for (i = 2; i < nprops; ++i) { \
             dpdy_a[i] = fix_mult(dxdy_ac, dp[i].x) + dp[i].y; \
-            p_a[i] = v0[i] + fix_mult(y_pre0, dpdy_a[i]); \
+            p_a[i] = v0[i] + fix_mult_frac(y_pre0, dpdy_a[i]); \
         } \
         if (y0i < y1i) { \
             /* left is AC, right is AB */ \
             const fix64 dxdy_b = dxdy_ab; \
             /* last column of this scanline */ \
-            fix64 x_b = v0[0] + fix_mult(y_pre0, dxdy_ab); \
+            fix64 x_b = v0[0] + fix_mult_frac(y_pre0, dxdy_ab); \
             R_RASTERIZE_TRI_SEG(y0i, y1i, nprops); \
         } \
         if (y1i < y2i) { \
@@ -597,21 +765,21 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
             const fix64 dxdy_b = dxdy_bc; \
             /* calculate prestep for vertex B */ \
             const fix64 y_pre1 = FIX_ONE - (v1[1] - INT_2_FIX(y1i)); \
-            fix64 x_b = v1[0] + fix_mult(y_pre1, dxdy_bc); \
+            fix64 x_b = v1[0] + fix_mult_frac(y_pre1, dxdy_bc); \
             R_RASTERIZE_TRI_SEG(y1i, y2i, nprops); \
         } \
     } else { \
         /* longer edge is on the right */ \
         const fix64 dxdy_b = dxdy_ac; \
         /* last column of this scanline is on AC */ \
-        fix64 x_b = v0[0] + fix_mult(y_pre0, dxdy_ac); \
+        fix64 x_b = v0[0] + fix_mult_frac(y_pre0, dxdy_ac); \
         if (y0i < y1i) { \
             /* right is AC, left is AB */ \
             const fix64 dxdy_a = dxdy_ab; \
-            fix64 x_a = v0[0] + fix_mult(y_pre0, dxdy_a); \
+            fix64 x_a = v0[0] + fix_mult_frac(y_pre0, dxdy_a); \
             for (i = 2; i < nprops; ++i) { \
                 dpdy_a[i] = fix_mult(dxdy_ab, dp[i].x) + dp[i].y; \
-                p_a[i] = v0[i] + fix_mult(y_pre0, dpdy_a[i]); \
+                p_a[i] = v0[i] + fix_mult_frac(y_pre0, dpdy_a[i]); \
             } \
             R_RASTERIZE_TRI_SEG(y0i, y1i, nprops); \
         } \
@@ -619,10 +787,10 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
             /* right is AC, left is BC */ \
             const fix64 y_pre1 = FIX_ONE - (v1[1] - INT_2_FIX(y1i)); \
             const fix64 dxdy_a = dxdy_bc; \
-            fix64 x_a = v1[0] + fix_mult(y_pre1, dxdy_a); \
+            fix64 x_a = v1[0] + fix_mult_frac(y_pre1, dxdy_a); \
             for (i = 2; i < nprops; ++i) { \
                 dpdy_a[i] = fix_mult(dxdy_bc, dp[i].x) + dp[i].y; \
-                p_a[i] = v1[i] + fix_mult(y_pre1, dpdy_a[i]); \
+                p_a[i] = v1[i] + fix_mult_frac(y_pre1, dpdy_a[i]); \
             } \
             R_RASTERIZE_TRI_SEG(y1i, y2i, nprops); \
         } \
@@ -778,6 +946,23 @@ static struct ShaderProgram *gfx_soft_create_and_load_new_shader(uint32_t shader
     }
 
     prg->num_props = num_props;
+
+    // fast span drawers for the common shaders (see span_draw); others use the per-pixel loop
+    static const struct { combine_fn_t combine; span_fn_t span, span_blend; } spans[] = {
+        { combine_tex, span_tex, span_tex_blend },
+        { combine_tex_rgb, span_tex_rgb, span_tex_rgb_blend },
+        { combine_tex_rgba, span_tex_rgba, span_tex_rgba_blend },
+        { combine_rgb, span_rgb, span_rgb_blend },
+        { combine_rgba, span_rgba, span_rgba_blend },
+    };
+    prg->span = NULL;
+    if (prg->draw_flags == 0 || prg->draw_flags == DRAW_BLEND) {
+        for (size_t i = 0; i < sizeof(spans) / sizeof(spans[0]); i++) {
+            if (prg->combine == spans[i].combine) {
+                prg->span = prg->draw_flags ? spans[i].span_blend : spans[i].span;
+            }
+        }
+    }
     // pick rasterizer that interps the amount of float properties this shader requires
     prg->rast = rast_funcs[num_props];
 
@@ -807,6 +992,7 @@ static uint32_t gfx_soft_new_texture(void) {
     }
 
     tex_hdr[id].sample = tex_sample_nearest_rr;
+    tex_hdr[id].cms = tex_hdr[id].cmt = WRAP_REPEAT;
 
     return id;
 }
@@ -865,8 +1051,11 @@ static void gfx_soft_set_sampler_parameters(int tile, bool linear_filter, uint32
         tex_sample_nearest_mm, // 1010
     };
 
-    cms = gfx_cm_to_local(cms) << 2;
+    cms = gfx_cm_to_local(cms);
     cmt = gfx_cm_to_local(cmt);
+    cur_tex[tile]->cms = cms;
+    cur_tex[tile]->cmt = cmt;
+    cms <<= 2;
 
     cur_tex[tile]->filter = linear_filter;
     cur_tex[tile]->sample = samplers[cms | cmt];
@@ -1001,6 +1190,11 @@ static void gfx_soft_prepare_tables(void) {
     for (int x = 0; x < 0x100; ++x)
         for (int y = 0; y < 0x100; ++y)
             mult_tab[x][y] = (x * y) >> 8;
+
+    for (int n = 1; n < SPAN_RECIP_MAX; ++n)
+        span_recip[n] = 65536 / n;
+    for (int i = 0; i < 1024; ++i) // 2^16 / (1 + (i + 0.5) / 1024), rounded
+        span_rcp_tab[i] = (uint16_t) ((2u * 65536u * 1024u + (2048u + 2u * i + 1u) / 2u) / (2048u + 2u * i + 1u));
 }
 
 static void gfx_soft_set_resolution(const int width, const int height) {

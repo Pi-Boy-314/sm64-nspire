@@ -567,7 +567,7 @@ ifeq ($(TARGET_NSP),1)
 	ifeq ($(ARMSIM),1)
 		GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
 		# -mcpu and -D_TINSPIRE as nspire-gcc passes them; newlib's semihosting runtime stands in for Ndless
-		PLATFORM_CFLAGS := -mcpu=arm926ej-s -D_TINSPIRE -DTARGET_NSP -DARMSIM_BUILD -DBENCHMARK -DGIT_HASH=\"$(GIT_HASH)\" -I tools/host_shim
+		PLATFORM_CFLAGS := -mcpu=arm926ej-s -D_TINSPIRE -DTARGET_NSP -DARMSIM_BUILD -DBENCHMARK -DGIT_HASH=\"$(GIT_HASH)\" -I tools/host_shim -g
 		PLATFORM_LDFLAGS := -mcpu=arm926ej-s --specs=rdimon.specs -lm
 	endif
 endif

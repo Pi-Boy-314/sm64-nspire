@@ -37,6 +37,16 @@ static inline fix64 fix_mult(const fix64 fix1, const fix64 fix2) { // multiply 2
         + i2 * f1;
 }
 
+// fix_mult(t, v) for t in [0, 1), e.g. a sub-pixel prestep: two multiplies instead of the general
+// case's six, same result. Other t falls back to fix_mult.
+static inline fix64 fix_mult_frac(const fix64 t, const fix64 v) {
+    if ((uint64_t) t >= (uint64_t) FIX_ONE) {
+        return fix_mult(t, v);
+    }
+    const uint32_t f = (uint32_t) t;
+    return (fix64) (((uint64_t) (uint32_t) v * f) >> 32) + (int64_t) (int32_t) (v >> 32) * f;
+}
+
 static inline int32_t fix_mult_i64(const fix64 fix1, const fix64 fix2) { // multiply two fixes, return integer part. saves time not calculating decimal * decimal
     fix64 i1 = GET_INT(fix1);
     fix64 f1 = GET_FRAC(fix1);
