@@ -155,28 +155,27 @@ void nsp_swap_buffers_begin(void) {
 }
 
 void nsp_swap_buffers_end(void) {
-    static uint16_t buffer[SCREEN_WIDTH * SCREEN_HEIGHT];
+    // Two RGB565 pixels per word: the ARM is little-endian, so the low half is the left pixel.
+    // Writing whole words halves the number of stores compared to 16-bit writes.
+    static uint32_t buffer[SCREEN_WIDTH * SCREEN_HEIGHT / 2];
+    const uint32_t *src = gfx_output;
 
     // populate buffer according to configuration
     if (config120pMode) {
-        // spread 160 * 120 img to fill whole screen, not just top left quarter
-        int img_pix = 0;
-        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i += 2 * SCREEN_WIDTH) { // skip a row
-            for (int col = 0; col < SCREEN_WIDTH; col += 2, img_pix++) { // skip a column
-                uint16_t c16 = c4444_to_c565(gfx_output[img_pix]);
-                int index = i + col;
-
-                buffer[index] = c16;
-                buffer[index + 1] = c16;
-                buffer[index + SCREEN_WIDTH] = c16;
-                buffer[index + SCREEN_WIDTH + 1] =  c16; // expand single pixel to 2*2 square, towards bottom right
+        // spread 160 * 120 img to fill whole screen: each pixel becomes a 2*2 square
+        for (int y = 0; y < HALF_HEIGHT; y++) {
+            uint32_t *row0 = buffer + y * SCREEN_WIDTH; // 2 screen rows = SCREEN_WIDTH words
+            uint32_t *row1 = row0 + SCREEN_WIDTH / 2;
+            for (int x = 0; x < HALF_WIDTH; x++) {
+                uint32_t c16 = c4444_to_c565(*src++);
+                uint32_t pair = c16 | (c16 << 16);
+                row0[x] = pair;
+                row1[x] = pair;
             }
         }
     } else {
-        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
-            uint32_t c32 = gfx_output[i];
-
-            buffer[i] = c4444_to_c565(c32);
+        for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT / 2; i++, src += 2) {
+            buffer[i] = c4444_to_c565(src[0]) | ((uint32_t) c4444_to_c565(src[1]) << 16);
         }
     }
 
