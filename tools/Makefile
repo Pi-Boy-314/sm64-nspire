@@ -65,4 +65,7 @@ endef
 
 $(foreach p,$(PROGRAMS),$(eval $(call COMPILE,$(p))))
 
+# tabledesign links against libaudiofile: build it first, or make -j races
+tabledesign: | $(LIBAUDIOFILE)
+
 .PHONY: all clean default

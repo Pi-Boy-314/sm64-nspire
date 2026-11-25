@@ -70,6 +70,7 @@ Most folders come from the [Super Mario 64 decompilation](https://github.com/n64
 | `src/pc/settings_menu.c` | Settings, speed info and quit screens |
 | `src/pc/configfile.c` | Reads and writes `sm64_config.txt.tns` |
 | `src/pc/benchmark.c` | Self-running benchmark build |
+| `tools/rom/` | Checks your ROM and extracts the game's data from it |
 | `tools/host_shim/` | Stand-in Ndless headers for the computer test build |
 | `tools/armsim/` | Runs the benchmark in QEMU and profiles it |
 | `tools/bench/` | Scripts that compare frames and summarize speed |

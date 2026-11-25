@@ -4,9 +4,12 @@ import sys
 import os
 import json
 
+# Run from the repository root. This script's own data files sit next to it.
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 
 def read_asset_map():
-    with open("assets.json") as f:
+    with open(os.path.join(HERE, "assets.json")) as f:
         ret = json.load(f)
     return ret
 
@@ -141,7 +144,7 @@ def main():
             print("Failed to open " + fname + "! " + str(e))
             sys.exit(1)
         sha1 = hashlib.sha1(roms[lang]).hexdigest()
-        with open("sm64." + lang + ".sha1", "r") as f:
+        with open(os.path.join(HERE, "sm64." + lang + ".sha1"), "r") as f:
             expected_sha1 = f.read().split()[0]
         if sha1 != expected_sha1:
             print(
