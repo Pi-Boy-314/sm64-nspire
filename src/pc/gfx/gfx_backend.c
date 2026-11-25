@@ -531,7 +531,7 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
             uz = u16clamp(FIX_2_INT(p[2] * 65535 + z_offset)); \
             if (!z_test || uz <= z_buffer[idx]) { \
                 /* Improve efficiency here? w is 1 very often */ \
-                w = p[3] == FIX_ONE ? FIX_ONE : fix_div_s(FIX_ONE, p[3]); /*  the combiner will multiply by w any props it needs to persp correct */ \
+                w = p[3] == FIX_ONE ? FIX_ONE : fix_recip(p[3]); /*  the combiner will multiply by w any props it needs to persp correct */ \
                 draw_fn(idx, uz, cur_shader->combine(w, p + 4)); \
             } \
             for (i = 2; i < nprops; ++i) p[i] += dp[i].x; \
@@ -556,10 +556,10 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
     const Vector4 ab = (Vector4) {{ v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2], v1[3] - v0[3] }}; \
     const Vector4 ac = (Vector4) {{ v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2], v2[3] - v0[3] }}; \
     const Vector2 bc = (Vector2) {{ v2[0] - v1[0], v2[1] - v1[1] }}; \
-    const fix64 denom = fix_div_s(FIX_ONE, fix_mult(ac.x, ab.y) - fix_mult(ab.x, ac.y)); \
-    const fix64 dxdy_ab = ab.y != 0 ? fix_div_s(ab.x, ab.y) : ab.x > 0 ? FIX_MAX : FIX_MIN; /* x increment along ab */ \
-    const fix64 dxdy_ac = ac.y != 0 ? fix_div_s(ac.x, ac.y) : ac.x > 0 ? FIX_MAX : FIX_MIN; /* x increment along ac */ \
-    const fix64 dxdy_bc = bc.y != 0 ? fix_div_s(bc.x, bc.y) : bc.x > 0 ? FIX_MAX : FIX_MIN; /* PROTECT AGAINST DIV BY ZERO HERE */ \
+    const fix64 denom = fix_div(FIX_ONE, fix_mult(ac.x, ab.y) - fix_mult(ab.x, ac.y)); \
+    const fix64 dxdy_ab = ab.y != 0 ? fix_div(ab.x, ab.y) : ab.x > 0 ? FIX_MAX : FIX_MIN; /* x increment along ab */ \
+    const fix64 dxdy_ac = ac.y != 0 ? fix_div(ac.x, ac.y) : ac.x > 0 ? FIX_MAX : FIX_MIN; /* x increment along ac */ \
+    const fix64 dxdy_bc = bc.y != 0 ? fix_div(bc.x, bc.y) : bc.x > 0 ? FIX_MAX : FIX_MIN; /* PROTECT AGAINST DIV BY ZERO HERE */ \
     const bool side = dxdy_ac > dxdy_ab; /* which side the longer edge (AC) is on */ \
     const fix64 y_pre0 = FIX_ONE - (v0[1] - INT_2_FIX(y0i));  /* subpixel pre-step */ \
     fix64 dpdy_a[nprops]; /* vertex prop increments along left edge */ \

@@ -849,7 +849,7 @@ static inline void gfx_push_triangle(const struct LoadedVertex *restrict v1, con
 
     for (int i = 0; i < 3; i++) {
         const fix64 w = v_arr[i]->w;
-        const fix64 w_inv = FIX_INV(w);
+        const fix64 w_inv = fix_recip(w);
         buf_vbo[buf_vbo_len++] = fix_mult(v_arr[i]->x, w_inv);
         buf_vbo[buf_vbo_len++] = fix_mult(v_arr[i]->y, w_inv);
         buf_vbo[buf_vbo_len++] = fix_mult(
@@ -982,7 +982,8 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
             if (this_in ^ next_in) {
                 struct LoadedVertex *xv = &v_out[v_num[outidx]++];
                 if (this_in) {
-                    const fix64 t = fix_div_s(d1, d1 - d2);
+                    fix64 t = fix_div(d1, d1 - d2);
+                    if (t > FIX_ONE) t = FIX_ONE; // fix_div can be 1 ulp high; t > 1 wraps rgba_lerp
                     xv->x = fix_lerp(vthis->x, vnext->x, t);
                     xv->y = fix_lerp(vthis->y, vnext->y, t);
                     xv->z = fix_lerp(vthis->z, vnext->z, t);
@@ -992,7 +993,8 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
                     xv->color = rgba_lerp(vthis->color, vnext->color, t);
                     xv->clip_rej = 0;
                 } else {
-                    const fix64 t = fix_div_s(d2, d2 - d1);
+                    fix64 t = fix_div(d2, d2 - d1);
+                    if (t > FIX_ONE) t = FIX_ONE; // fix_div can be 1 ulp high; t > 1 wraps rgba_lerp
                     xv->x = fix_lerp(vnext->x, vthis->x, t);
                     xv->y = fix_lerp(vnext->y, vthis->y, t);
                     xv->z = fix_lerp(vnext->z, vthis->z, t);
@@ -1033,10 +1035,13 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     }
 
     if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
-        fix64 dx1 = fix_div_s(v1->x, v1->w) - fix_div_s(v2->x, v2->w);
-        fix64 dy1 = fix_div_s(v1->y, v1->w) - fix_div_s(v2->y, v2->w);
-        fix64 dx2 = fix_div_s(v3->x, v3->w) - fix_div_s(v2->x, v2->w);
-        fix64 dy2 = fix_div_s(v3->y, v3->w) - fix_div_s(v2->y, v2->w);
+        const fix64 x1 = fix_div(v1->x, v1->w), y1 = fix_div(v1->y, v1->w);
+        const fix64 x2 = fix_div(v2->x, v2->w), y2 = fix_div(v2->y, v2->w);
+        const fix64 x3 = fix_div(v3->x, v3->w), y3 = fix_div(v3->y, v3->w);
+        fix64 dx1 = x1 - x2;
+        fix64 dy1 = y1 - y2;
+        fix64 dx2 = x3 - x2;
+        fix64 dy2 = y3 - y2;
         fix64 cross = fix_mult(dx1, dy2) - fix_mult(dy1, dx2);
 
         if ((v1->w < 0) ^ (v2->w < 0) ^ (v3->w < 0)) {
