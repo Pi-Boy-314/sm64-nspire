@@ -52,9 +52,9 @@ Fastest first; keys 1 to 5 on the settings screen.
 | Sky | Off | Off | On | On | On |
 | Fog | Off | Off | Off | On | On |
 | Shadows | Off | On | On | On | On |
-| Sharp HUD | On + menus | On + menus | On + menus | On + menus | On + menus |
+| Sharp HUD | Off | On + menus | On + menus | On + menus | On + menus |
 
-Ultra Performance goes for the most speed whatever it looks like: on a real calculator it took the start of Bob-omb Battlefield from 5.8 to 10.7 fps (compared with 160x120 with the sky on, measured before Sharp HUD was added; set Sharp HUD to Off for a little more). Ultra Quality is Quality with smooth textures: the best picture, but very slow. Any mix of settings works too.
+Ultra Performance goes for the most speed whatever it looks like: on a real calculator it runs the start of Bob-omb Battlefield at 10.7 fps, compared with 5.8 fps at 160x120 with the sky on. It turns Sharp HUD off, which saves about 13% at 80x60 but makes the HUD numbers and the file select screen blocky. Turn Sharp HUD on if you'd rather read them. Ultra Quality is Quality with smooth textures: the best picture, but very slow. Any mix of settings works too.
 
 ## Cheats
 

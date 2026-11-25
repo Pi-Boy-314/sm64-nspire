@@ -24,7 +24,7 @@ It also explains how to test changes and how to fix common problems.
 
 The game is still slow, but much faster than the original port. The game logic always runs at full speed (30 ticks per second). By default, the calculator skips drawing the frames it can't keep up with.
 
-- **On a real calculator,** the Ultra Performance preset runs the start of Bob-omb Battlefield at about 10.7 FPS. The Balanced preset (160×120, sky on) runs it at 5.8 FPS. Both were measured before Sharp HUD was added.
+- **On a real calculator,** the Ultra Performance preset runs the start of Bob-omb Battlefield at about 10.7 FPS. The Balanced preset (160×120, sky on) runs it at 5.8 FPS. Both were measured with Sharp HUD off, which Ultra Performance uses.
 - **At the same settings,** the renderer needs about 2.8 times fewer instructions per frame than the original port at 160×120, and 3.9 times fewer at 320×240. These figures come from an emulator: see [Testing your changes](INSTRUCTIONS.md#testing-your-changes).
 
 To trade picture quality for speed, pick a preset on the settings screen (keys `1` to `5`).

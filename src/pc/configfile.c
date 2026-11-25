@@ -62,7 +62,7 @@ static const struct {
     bool sky, fog, shadows;
 } presets[PRESET_COUNT] = {
     [PRESET_ULTRA_PERFORMANCE] = { RES_80x60,   FRAMESKIP_AUTO, TEXTURES_FLAT,
-                                   .sky = false, .fog = false, .shadows = false, .sharp_text = SHARP_TEXT_HUD_AND_MENUS },
+                                   .sky = false, .fog = false, .shadows = false, .sharp_text = SHARP_TEXT_OFF },
     [PRESET_PERFORMANCE]       = { RES_160x120, FRAMESKIP_AUTO, TEXTURES_NORMAL,
                                    .sky = false, .fog = false, .shadows = true,  .sharp_text = SHARP_TEXT_HUD_AND_MENUS },
     [PRESET_BALANCED]          = { RES_160x120, FRAMESKIP_AUTO, TEXTURES_NORMAL,
