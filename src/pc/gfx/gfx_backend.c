@@ -1264,25 +1264,32 @@ static void gfx_soft_prepare_tables(void) {
         span_rcp_tab[i] = (uint16_t) ((2u * 65536u * 1024u + (2048u + 2u * i + 1u) / 2u) / (2048u + 2u * i + 1u));
 }
 
+// The buffers are allocated once, at the largest size (320x240), so the settings screen can
+// switch resolution during play without a reallocation that could fail on a fragmented heap.
+#define MAX_SCR_SIZE (320 * 240)
+
 static void gfx_soft_set_resolution(const int width, const int height) {
-    if (z_buffer) free(z_buffer);
-    if (gfx_output) free(gfx_output);
+    if (!z_buffer) {
+        z_buffer = calloc(MAX_SCR_SIZE, sizeof(int16_t));
+        if (!z_buffer) {
+            printf("gfx_soft: could not alloc zbuffer\n");
+            abort();
+        }
+    }
+    if (!gfx_output) {
+        gfx_output = calloc(MAX_SCR_SIZE, sizeof(uint32_t));
+        if (!gfx_output) {
+            printf("gfx_soft: could not alloc color buffer\n");
+            abort();
+        }
+    }
 
     scr_width = width;
     scr_height = height;
+    if (scr_width * scr_height > MAX_SCR_SIZE) { // never happens: 320x240 is the largest mode
+        scr_height = MAX_SCR_SIZE / scr_width;
+    }
     scr_size = scr_width * scr_height;
-
-    z_buffer = calloc(scr_width * scr_height, sizeof(int16_t));
-    if (!z_buffer) {
-        printf("gfx_soft: could not alloc zbuffer for %dx%d\n", scr_width, scr_height);
-        abort();
-    }
-
-    gfx_output = calloc(scr_width * scr_height, sizeof(uint32_t));
-    if (!gfx_output) {
-        printf("gfx_soft: could not alloc color buffer for %dx%d\n", scr_width, scr_height);
-        abort();
-    }
 
     depth_clear();
 }
@@ -1307,6 +1314,10 @@ static void gfx_soft_init(void) {
 }
 
 static void gfx_soft_start_frame(void) {
+    // the settings screen can switch resolution during play
+    if ((int) gfx_current_dimensions.width != scr_width || (int) gfx_current_dimensions.height != scr_height) {
+        gfx_soft_set_resolution(gfx_current_dimensions.width, gfx_current_dimensions.height);
+    }
     // depth_swap(); // FIXME: ztrick
     depth_clear();
 }

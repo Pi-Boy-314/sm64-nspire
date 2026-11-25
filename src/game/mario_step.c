@@ -8,6 +8,7 @@
 #include "game_init.h"
 #include "interaction.h"
 #include "mario_step.h"
+#include "pc/configfile.h"
 
 static s16 sMovingSandSpeeds[] = { 12, 8, 4, 0 };
 
@@ -324,7 +325,12 @@ s32 perform_ground_step(struct MarioState *m) {
     u32 stepResult;
     Vec3f intendedPos;
 
-    for (i = 0; i < 4; i++) {
+    // super speed cheat: 8 quarter steps instead of 4, so twice the distance with the same
+    // collision checks per step. Moving actions only (walking, running, sliding): not standing
+    // still on moving sand or wind, punches, or metal Mario underwater.
+    const s32 numSteps =
+        configCheatSuperSpeed && (m->action & ACT_GROUP_MASK) == ACT_GROUP_MOVING ? 8 : 4;
+    for (i = 0; i < numSteps; i++) {
         intendedPos[0] = m->pos[0] + m->floor->normal.y * (m->vel[0] / 4.0f);
         intendedPos[2] = m->pos[2] + m->floor->normal.y * (m->vel[2] / 4.0f);
         intendedPos[1] = m->pos[1];

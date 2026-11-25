@@ -10,23 +10,29 @@
 #include <ctype.h>
 
 #include "configfile.h"
+#include "controls.h"
 
 #define ARRAY_LEN(arr) (sizeof(arr) / sizeof(arr[0]))
 
 #define CONFIG_HEADER "# Super Mario 64 for TI-Nspire: settings"
 
 /*
- * Settings and their defaults (the Balanced preset)
+ * Settings and their defaults (the Balanced preset; everything else off)
  */
 bool configDrawSky               = true;
 bool configFiltering             = false;
 bool configEnableFog             = false;
 bool config120pMode              = true;
-unsigned int configFrameskip     = 4; // at most this many frames in a row are skipped to keep game speed
+bool configShowFps               = false;
+unsigned int configFrameskip     = 4; // most frames in a row skipped to keep game speed, or FRAMESKIP_AUTO
 
 bool configCheatHealth           = false;
 bool configCheatLives            = false;
 bool configCheatMoonJump         = false;
+bool configCheatSuperSpeed       = false;
+bool configCheatKeepCaps         = false;
+bool configCheatSkipIntro        = false;
+bool configCheatExitCourse       = false;
 
 #ifdef BENCHMARK
 unsigned int configBenchDemo     = 0;   // which attract-mode demo to play (wraps if too large)
@@ -45,9 +51,9 @@ static const struct {
     unsigned int frameskip;
     bool sky, fog;
 } presets[PRESET_COUNT] = {
-    [PRESET_PERFORMANCE] = { .low_res = true,  .frameskip = 6, .sky = false, .fog = false },
-    [PRESET_BALANCED]    = { .low_res = true,  .frameskip = 4, .sky = true,  .fog = false },
-    [PRESET_QUALITY]     = { .low_res = false, .frameskip = 2, .sky = true,  .fog = true  },
+    [PRESET_PERFORMANCE] = { .low_res = true,  .frameskip = FRAMESKIP_AUTO, .sky = false, .fog = false },
+    [PRESET_BALANCED]    = { .low_res = true,  .frameskip = 4,              .sky = true,  .fog = false },
+    [PRESET_QUALITY]     = { .low_res = false, .frameskip = 2,              .sky = true,  .fog = true  },
 };
 
 void configfile_apply_preset(enum ConfigPreset preset) {
@@ -70,12 +76,23 @@ enum ConfigPreset configfile_current_preset(void) {
     return PRESET_CUSTOM;
 }
 
+void configfile_reset_defaults(void) {
+    configfile_apply_preset(PRESET_BALANCED);
+    configShowFps = false;
+    configCheatHealth = configCheatLives = configCheatMoonJump = false;
+    configCheatSuperSpeed = configCheatKeepCaps = configCheatSkipIntro = false;
+    configCheatExitCourse = false;
+    controls_reset();
+}
+
 /*
- * The settings in the file, in the order they are written. help is written above each one.
+ * The settings in the file, in the order they are written. help is written above each one,
+ * section (if any) as a heading before it.
  */
 enum ConfigOptionType {
     CONFIG_TYPE_BOOL,
     CONFIG_TYPE_UINT,
+    CONFIG_TYPE_FRAMESKIP, // a number up to FRAMESKIP_MAX, or "auto"
 };
 
 struct ConfigOption {
@@ -86,23 +103,27 @@ struct ConfigOption {
         unsigned int *uintValue;
     };
     unsigned int max; // largest value accepted (numbers only)
+    const char *section;
     const char *help;
 };
 
 static const struct ConfigOption options[] = {
     {.name = "enable_120p_mode", .type = CONFIG_TYPE_BOOL, .boolValue = &config120pMode,
+     .section = "SETTINGS",
      .help = "Resolution.\n"
              "true: draw at 160x120 and stretch it to fill the screen. Much faster\n"
              "(roughly 2 to 3 times), but blocky, and small text is hard to read.\n"
              "false: full 320x240 resolution. Sharp, but much slower."},
-    {.name = "frameskip", .type = CONFIG_TYPE_UINT, .uintValue = &configFrameskip,
+    {.name = "frameskip", .type = CONFIG_TYPE_FRAMESKIP, .uintValue = &configFrameskip,
      .max = FRAMESKIP_MAX,
      .help = "Frame skipping: the most frames in a row the game may skip drawing to\n"
              "keep running at its real speed (30 game frames per second).\n"
              "0 draws every frame, but then the whole game runs in slow motion\n"
              "whenever the calculator can't keep up. Higher values keep the game\n"
              "closer to real speed, but movement gets jumpier.\n"
-             "A number from 0 to 30."},
+             "auto skips as many frames as needed for full speed, but at most 10\n"
+             "in a row.\n"
+             "auto, or a number from 0 to 30."},
     {.name = "draw_sky", .type = CONFIG_TYPE_BOOL, .boolValue = &configDrawSky,
      .help = "true: draw the sky backgrounds.\n"
              "false: plain black sky. Faster, because the sky covers a large part\n"
@@ -113,8 +134,14 @@ static const struct ConfigOption options[] = {
              "slowly.\n"
              "false: no fog."},
 #ifndef BENCHMARK
+    {.name = "show_fps", .type = CONFIG_TYPE_BOOL, .boolValue = &configShowFps,
+     .help = "true: show a counter in the bottom-left corner with the frames drawn\n"
+             "per second (FPS) and the game speed (100% = full N64 speed, lower =\n"
+             "slow motion). Handy for picking a frameskip value. Not part of the\n"
+             "presets."},
     {.name = "cheat_infinite_health", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatHealth,
-     .help = "CHEATS. All are off (false) by default. They don't change your save\n"
+     .section = "CHEATS",
+     .help = "All cheats are off (false) by default. They don't change your save\n"
              "file, but stars and coins you collect while using them are saved as\n"
              "usual.\n"
              "\n"
@@ -123,11 +150,24 @@ static const struct ConfigOption options[] = {
     {.name = "cheat_infinite_lives", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatLives,
      .help = "true: the life counter stays at 99, so you never get a game over."},
     {.name = "cheat_moon_jump", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatMoonJump,
-     .help = "true: hold A (the menu key) in the air and Mario keeps rising.\n"
+     .help = "true: hold the A button in the air and Mario keeps rising.\n"
              "Let go to fall."},
+    {.name = "cheat_super_speed", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatSuperSpeed,
+     .help = "true: Mario covers twice the ground when walking, running or sliding."},
+    {.name = "cheat_keep_caps", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatKeepCaps,
+     .help = "true: the wing, metal and vanish caps don't run out until you leave\n"
+             "the level or lose the cap."},
+    {.name = "cheat_skip_intro", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatSkipIntro,
+     .help = "true: a new save file starts right outside the castle, without\n"
+             "Peach's letter and Lakitu's flight."},
+    {.name = "cheat_exit_course_anytime", .type = CONFIG_TYPE_BOOL,
+     .boolValue = &configCheatExitCourse,
+     .help = "true: the pause menu always offers \"Exit course\", even in mid-air,\n"
+             "swimming or anywhere the game normally doesn't allow it."},
 #endif
 #ifdef BENCHMARK
     {.name = "bench_demo", .type = CONFIG_TYPE_UINT, .uintValue = &configBenchDemo, .max = 255,
+     .section = "BENCHMARK",
      .help = "Benchmark build only: which attract-mode demo to play (0 to 3)."},
     {.name = "bench_warmup", .type = CONFIG_TYPE_UINT, .uintValue = &configBenchWarmup,
      .max = 100000,
@@ -145,7 +185,9 @@ static const struct ConfigOption options[] = {
 static const char *const intro =
     "#\n"
     "# You can change these on the calculator: start the game, and the first\n"
-    "# screen shows the settings (arrow keys to change, Enter to save and play).\n"
+    "# screen shows the settings (arrow keys to change, tab for the next page,\n"
+    "# Enter to save and play). During play, the settings key (tab) opens the\n"
+    "# same screen.\n"
     "#\n"
     "# Or edit this file on a computer: copy it from the calculator with the\n"
     "# TI-Nspire software (or TI-Nspire Computer Link), open it in any plain text\n"
@@ -208,7 +250,7 @@ static char *next_word(char **s) {
     return word;
 }
 
-// One line of the file. Comments and unknown settings (such as the key_* lines and
+// One line of the file. Comments and unknown settings (such as the numeric key_* lines and
 // texture_filtering that older versions wrote) are ignored.
 static void parse_line(char *line, bool *has_header) {
     char *p = line;
@@ -232,15 +274,30 @@ static void parse_line(char *line, bool *has_header) {
         if (strcmp(name, o->name) == 0) {
             if (o->type == CONFIG_TYPE_BOOL) {
                 parse_bool(value, o->boolValue);
+            } else if (o->type == CONFIG_TYPE_FRAMESKIP && strcmp(value, "auto") == 0) {
+                *o->uintValue = FRAMESKIP_AUTO;
             } else {
                 parse_uint(value, o->max, o->uintValue);
             }
             return;
         }
     }
+#ifndef BENCHMARK
+    for (int c = 0; c < CONTROL_COUNT; c++) {
+        if (strcmp(name, controls_config_name(c)) == 0) {
+            const int key = controls_key_by_name(value);
+            if (key != KEY_NONE && !controls_key_reserved(key)) {
+                controlKeys[c] = key;
+            }
+            return;
+        }
+    }
+#endif
 }
 
 void configfile_load(const char *filename) {
+    controls_reset(); // keys missing from the file keep their defaults
+
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
         configfile_save(filename); // first start: write the defaults with their explanations
@@ -261,6 +318,21 @@ void configfile_load(const char *filename) {
     }
     fclose(file);
 
+#ifndef BENCHMARK
+    // the settings key must be a key of its own, or pressing that button would open the screen
+    for (int c = 0; c < CONTROL_COUNT; c++) {
+        if (c != CONTROL_SETTINGS && controlKeys[c] == controlKeys[CONTROL_SETTINGS]) {
+            controlKeys[CONTROL_SETTINGS] = controls_key_by_name("tab");
+            for (int d = 0; d < CONTROL_COUNT; d++) {
+                if (d != CONTROL_SETTINGS && controlKeys[d] == controlKeys[CONTROL_SETTINGS]) {
+                    controlKeys[CONTROL_SETTINGS] = KEY_NONE; // tab is taken too: no settings key
+                }
+            }
+            break;
+        }
+    }
+#endif
+
     if (!has_header) {
         configfile_save(filename); // file from an older version: same values, now explained
     }
@@ -276,16 +348,20 @@ static void write_comment(FILE *file, const char *text) {
     }
 }
 
-bool configfile_save(const char *filename) {
-    FILE *file = fopen(filename, "w");
-    if (file == NULL) {
-        return false;
+static void write_section(FILE *file, const char *title) {
+    fprintf(file, "\n\n# ===== %s =====\n", title);
+}
+
+static void frameskip_text(unsigned int v, char *buf, size_t size) {
+    if (v == FRAMESKIP_AUTO) {
+        snprintf(buf, size, "auto");
+    } else {
+        snprintf(buf, size, "%u", v);
     }
+}
 
-    fputs(CONFIG_HEADER "\n", file);
-    fputs(intro, file);
-
-    // preset table, made from the presets above so it can't go out of date
+static void write_presets(FILE *file) {
+    // made from the presets above so it can't go out of date
     fputs("# Ready-made presets (on the settings screen: keys 1, 2 and 3):\n#\n", file);
     for (int row = 0; row < 5; row++) {
         static const char *const names[5] = { "", "enable_120p_mode", "frameskip", "draw_sky", "enable_fog" };
@@ -296,7 +372,7 @@ bool configfile_save(const char *filename) {
             switch (row) {
                 case 0: snprintf(cell, sizeof(cell), "%s", configPresetNames[p]); break;
                 case 1: snprintf(cell, sizeof(cell), "%s", presets[p].low_res ? "true" : "false"); break;
-                case 2: snprintf(cell, sizeof(cell), "%u", presets[p].frameskip); break;
+                case 2: frameskip_text(presets[p].frameskip, cell, sizeof(cell)); break;
                 case 3: snprintf(cell, sizeof(cell), "%s", presets[p].sky ? "true" : "false"); break;
                 default: snprintf(cell, sizeof(cell), "%s", presets[p].fog ? "true" : "false"); break;
             }
@@ -309,17 +385,70 @@ bool configfile_save(const char *filename) {
     }
     fputs("#\n# Balanced is the default. Performance gives the most speed, Quality the\n"
           "# best picture. Any mix of values works too.\n", file);
+}
+
+#ifndef BENCHMARK
+static void write_controls(FILE *file) {
+    write_section(file, "CONTROLS");
+    fputs("# The calculator key for each N64 button. esc (quit) and ctrl (speed\n"
+          "# statistics) are fixed and can't be used. If two buttons share a key,\n"
+          "# that key presses both, but key_settings must have a key of its own.\n"
+          "# The arrow keys include the touchpad diagonals.\n"
+          "# Key names:\n", file);
+    char line[80];
+    int n = snprintf(line, sizeof(line), "#  ");
+    for (int k = 0; k < controls_key_count(); k++) {
+        if (controls_key_reserved(k)) {
+            continue;
+        }
+        const char *name = controls_key_name(k);
+        if (n + 1 + (int) strlen(name) > 76) {
+            fprintf(file, "%s\n", line);
+            n = snprintf(line, sizeof(line), "#  ");
+        }
+        n += snprintf(line + n, sizeof(line) - n, " %s", name);
+    }
+    fprintf(file, "%s\n\n", line);
+    for (int c = 0; c < CONTROL_COUNT; c++) {
+        fprintf(file, "%-16s %s\n", controls_config_name(c), controls_key_name(controlKeys[c]));
+    }
+}
+#endif
+
+bool configfile_save(const char *filename) {
+    FILE *file = fopen(filename, "w");
+    if (file == NULL) {
+        return false;
+    }
+
+    fputs(CONFIG_HEADER "\n", file);
+    fputs(intro, file);
+    write_presets(file);
 
     for (unsigned int i = 0; i < ARRAY_LEN(options); i++) {
         const struct ConfigOption *o = &options[i];
+        if (o->section != NULL) {
+            write_section(file, o->section);
+        }
         fputc('\n', file);
         write_comment(file, o->help);
-        if (o->type == CONFIG_TYPE_BOOL) {
-            fprintf(file, "%s %s\n", o->name, *o->boolValue ? "true" : "false");
-        } else {
-            fprintf(file, "%s %u\n", o->name, *o->uintValue);
+        char value[16];
+        switch (o->type) {
+            case CONFIG_TYPE_BOOL:
+                snprintf(value, sizeof(value), "%s", *o->boolValue ? "true" : "false");
+                break;
+            case CONFIG_TYPE_FRAMESKIP:
+                frameskip_text(*o->uintValue, value, sizeof(value));
+                break;
+            default:
+                snprintf(value, sizeof(value), "%u", *o->uintValue);
+                break;
         }
+        fprintf(file, "%s %s\n", o->name, value);
     }
+#ifndef BENCHMARK
+    write_controls(file);
+#endif
 
     const bool ok = !ferror(file);
     return fclose(file) == 0 && ok;

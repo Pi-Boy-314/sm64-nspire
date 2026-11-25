@@ -10,6 +10,9 @@
 #include "pc/timer.h"
 #include "pc/profiling.h"
 #include "pc/benchmark.h"
+#include "pc/fps_overlay.h"
+#include "pc/controls.h"
+#include "pc/settings_menu.h"
 
 #define HALF_WIDTH SCREEN_WIDTH / 2
 #define HALF_HEIGHT SCREEN_HEIGHT / 2
@@ -54,7 +57,9 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
         if (new_frames) {
             //printf("ideal: %lu\ncurrent: %lu\n", frames_now, frames_prev); // PRINTING TOO MUCH ON HARDWARE CAUSES EXTREME TEARING
 
-            int to_skip = (new_frames > configFrameskip) ? configFrameskip : (new_frames - 1); // catch up by skipping up to configFrameskip frames
+            // catch up by skipping up to max_skip frames; auto: as many as needed, within reason
+            const uint32_t max_skip = configFrameskip == FRAMESKIP_AUTO ? FRAMESKIP_AUTO_MAX : configFrameskip;
+            int to_skip = (new_frames > max_skip) ? max_skip : (new_frames - 1);
 
             uint32_t t0 = tmr_ms();
 
@@ -63,6 +68,7 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
                 //printf("skipping: %ld\n", to_skip);
                 skip_frame = i < to_skip;
                 run_one_game_iter();
+                fps_overlay_tick();
 
                 if (isKeyPressed(KEY_NSPIRE_ESC)) {
                     return;
@@ -70,6 +76,13 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
             }
             //printf("tFRAME: %lu\n", tmr_ms() - t0);
 
+
+            // settings screen during play; the timer stops so the game doesn't try to catch up
+            if (controls_held(CONTROL_SETTINGS)) {
+                tmr_stop();
+                settings_menu_run_paused();
+                tmr_start();
+            }
 
             // Status screen / debug
             if (isKeyPressed(KEY_NSPIRE_CTRL)) {
@@ -159,6 +172,9 @@ void nsp_swap_buffers_end(void) {
         }
     }
 
+#ifndef BENCHMARK
+    fps_overlay_draw((uint16_t *) buffer); // little-endian: pixel order matches the word pairs
+#endif
     lcd_blit(buffer, SCR_320x240_565);
 }
 
