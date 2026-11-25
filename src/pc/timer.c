@@ -15,6 +15,7 @@ static unsigned new_control = 0b10000010; // enable, free-running, no-interrupt,
 static unsigned start_val;
 
 static uint32_t tmr_freq_ms; // frequency in ms, initialized by tmr_init
+static uint32_t tmr_freq_sec; // ticks per second, initialized by tmr_init (more precise than tmr_freq_ms)
 static uint32_t time_ms = 0;
 static uint32_t old_ms = 0;
 
@@ -58,6 +59,7 @@ void tmr_init(void) {
     tmr_start(); 
     msleep(CALIB_TIME);
     tmr_stop();
+    tmr_freq_sec = (v0 - *tmr_val) * (1000 / CALIB_TIME);
     tmr_freq_ms = (v0 - *tmr_val) / CALIB_TIME;
 
     printf("v0: %lu\nv1: %lu\nfreq: %lu\nms: %lu\n", v0, *tmr_val, tmr_freq_ms, tmr_ms());
@@ -74,4 +76,14 @@ void tmr_shutdown(void) {
 
 uint32_t _tmr_val(void) {
     return *tmr_val;
+}
+
+// Raw elapsed timer ticks since the last tmr_reset(). Wraps at 2^32, so only use
+// differences between two readings (unsigned subtraction handles the wrap).
+uint32_t tmr_ticks(void) {
+    return start_val - *tmr_val;
+}
+
+uint32_t tmr_ticks_per_sec(void) {
+    return tmr_freq_sec;
 }

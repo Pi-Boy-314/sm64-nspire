@@ -8,6 +8,12 @@ extern bool         configFiltering;
 extern bool         configEnableFog;
 extern bool			config120pMode;
 extern unsigned int configFrameskip;
+#ifdef BENCHMARK
+extern unsigned int configBenchDemo;
+extern unsigned int configBenchWarmup;
+extern unsigned int configBenchTicks;
+extern bool         configBenchDump;
+#endif
 extern unsigned int configKeyA;
 extern unsigned int configKeyB;
 extern unsigned int configKeyStart;

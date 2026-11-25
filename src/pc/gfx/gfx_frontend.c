@@ -178,10 +178,9 @@ static struct GfxRenderingAPI *gfx_rapi;
 
 static void gfx_flush(void) {
     if (buf_vbo_len > 0) {
-        uint64_t t0 = tmr_ms();
+        prof_raster_begin();
         gfx_rapi->draw_triangles(buf_vbo, buf_vbo_len, buf_vbo_num_tris);
-        tFlushing += tmr_ms() - t0;
-        numTris += buf_vbo_num_tris;
+        prof_raster_end(buf_vbo_num_tris);
 
         buf_vbo_len = 0;
         buf_vbo_num_tris = 0;
@@ -1820,20 +1819,19 @@ void gfx_run(Gfx *commands) {
     }
     dropped_frame = false;
 
-    profiling_reset();
-    uint64_t t0 = tmr_ms();
+    prof_lap(PROF_LOGIC); // glue between render_game() and here
     gfx_rapi->start_frame();
     gfx_run_dl(commands);
     gfx_flush();
     gfx_rapi->end_frame();
     gfx_wapi->swap_buffers_begin();
-
-    tFullRender = tmr_ms() - t0;
+    prof_lap(PROF_GFX);
 }
 
 void gfx_end_frame(void) {
     if (!dropped_frame) {
         gfx_rapi->finish_render();
         gfx_wapi->swap_buffers_end();
+        prof_lap(PROF_PRESENT);
     }
 }

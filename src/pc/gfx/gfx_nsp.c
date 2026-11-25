@@ -9,6 +9,7 @@
 #include "pc/configfile.h"
 #include "pc/timer.h"
 #include "pc/profiling.h"
+#include "pc/benchmark.h"
 
 #define HALF_WIDTH SCREEN_WIDTH / 2
 #define HALF_HEIGHT SCREEN_HEIGHT / 2
@@ -24,12 +25,22 @@ void nsp_init(UNUSED const char *game_name, UNUSED bool start_in_fullscreen) {
 }
 
 void nsp_main_loop(void (*run_one_game_iter)(void)) {
-    nio_console *console;
+    nio_console console_storage; // nio_init() writes the console handle here
+    nio_console *console = &console_storage;
     if (!nio_init(console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true))
         abort();
     nio_set_default(console);
     
     tmr_init();
+
+#ifdef BENCHMARK
+    nio_puts("Running benchmark, ESC aborts...\n");
+    nio_free(console);
+    tmr_reset();
+    tmr_start();
+    bench_run(run_one_game_iter, &skip_frame);
+    return;
+#endif
     
     // timer sanity check
     uint32_t t0 = tmr_ms();
@@ -88,17 +99,27 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
 
                 uint32_t tDelta = tmr_ms() - t0;
                 float fps = 1000.f / tDelta;
+                uint32_t raster_us = prof_ticks_to_us(gProfFrame.raster_ticks);
+                uint32_t gfx_us = prof_ticks_to_us(gProfFrame.ticks[PROF_GFX]);
 
                 nio_printf("Total elapsed (ms): %lu\n"
-                    "Backend Gfx time: %d\n"
-                    "Front + Backend Gfx time: %d\n"
                     "Total frame time (ms): %lu\n"
                     "FPS, physical: %f\n"
                     "FPS, virtual: %f\n"
                     "^ This includes frames skipped\n"
-                    "Tris this frame: %d\n"
-                    "Frames skipped: %d\n",
-                    tmr_ms(), tFlushing, tFullRender, tDelta, fps, fps * (to_skip + 1), numTris, to_skip);
+                    "Frames skipped: %d\n"
+                    "\nLast drawn tick (ms):\n"
+                    "  logic %lu, scene %lu\n"
+                    "  gfx front %lu, raster %lu\n"
+                    "  present %lu\n"
+                    "  tris %lu\n"
+                    "Skipped ticks cost only logic + scene.\n",
+                    tmr_ms(), tDelta, fps, fps * (to_skip + 1), to_skip,
+                    prof_ticks_to_us(gProfFrame.ticks[PROF_LOGIC]) / 1000,
+                    prof_ticks_to_us(gProfFrame.ticks[PROF_SCENE]) / 1000,
+                    (gfx_us - raster_us) / 1000, raster_us / 1000,
+                    prof_ticks_to_us(gProfFrame.ticks[PROF_PRESENT]) / 1000,
+                    (unsigned long) gProfFrame.tris);
 
                 wait_key_pressed();
                 nio_free(console);

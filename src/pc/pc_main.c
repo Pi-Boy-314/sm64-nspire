@@ -14,6 +14,7 @@
 
 #include "configfile.h"
 #include "timer.h"
+#include "profiling.h"
 
 
 #define CONFIG_FILE "sm64_config.txt.tns"
@@ -53,9 +54,11 @@ void send_display_list(struct SPTask *spTask) {
 
 
 void produce_one_frame(void) {
+    prof_frame_begin();
     gfx_start_frame();
     game_loop_one_iteration();
     gfx_end_frame();
+    prof_lap(PROF_LOGIC);
 }
 
 static void save_config(void) {

@@ -16,6 +16,9 @@
 #include "game/profiler.h"
 #include "game/save_file.h"
 #include "game/sound_init.h"
+#ifdef TARGET_NSP
+#include "pc/profiling.h"
+#endif
 #include "goddard/renderer.h"
 #include "geo_layout.h"
 #include "graph_node.h"
@@ -835,10 +838,16 @@ struct LevelCommand *level_script_execute(struct LevelCommand *cmd) {
     }
 
     profiler_log_thread5_time(LEVEL_SCRIPT_EXECUTE);
+#ifdef TARGET_NSP
+    prof_lap(PROF_LOGIC);
+#endif
     init_render_image();
     render_game();
     end_master_display_list();
     alloc_display_list(0);
+#ifdef TARGET_NSP
+    prof_lap(PROF_SCENE);
+#endif
 
     return sCurrentCmd;
 }

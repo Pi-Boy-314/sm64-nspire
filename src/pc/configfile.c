@@ -35,6 +35,13 @@ bool configEnableFog             = false;
 bool config120pMode              = true;
 unsigned int configFrameskip     = 4; // worst case scenario, renders 1 out of every (X + 1) frames
 
+#ifdef BENCHMARK
+unsigned int configBenchDemo     = 0;   // which attract-mode demo to play (wraps if too large)
+unsigned int configBenchWarmup   = 30;  // ticks rendered after the demo starts but not measured
+unsigned int configBenchTicks    = 600; // max ticks measured (stops earlier if the demo ends)
+bool         configBenchDump     = false; // write a few frames as .ppm.tns files for visual diffs
+#endif
+
 // Keyboard mappings (scancode values)
 #ifdef TARGET_DOS
 // Allegro scancodes
@@ -74,6 +81,12 @@ static const struct ConfigOption options[] = {
     {.name = "enable_fog",        .type = CONFIG_TYPE_BOOL, .boolValue = &configEnableFog},
     {.name = "enable_120p_mode",  .type = CONFIG_TYPE_BOOL, .boolValue = &config120pMode},
     {.name = "frameskip",         .type = CONFIG_TYPE_UINT, .uintValue = &configFrameskip},
+#ifdef BENCHMARK
+    {.name = "bench_demo",        .type = CONFIG_TYPE_UINT, .uintValue = &configBenchDemo},
+    {.name = "bench_warmup",      .type = CONFIG_TYPE_UINT, .uintValue = &configBenchWarmup},
+    {.name = "bench_ticks",       .type = CONFIG_TYPE_UINT, .uintValue = &configBenchTicks},
+    {.name = "bench_dump_frames", .type = CONFIG_TYPE_BOOL, .boolValue = &configBenchDump},
+#endif
     {.name = "key_a",             .type = CONFIG_TYPE_UINT, .uintValue = &configKeyA},
     {.name = "key_b",             .type = CONFIG_TYPE_UINT, .uintValue = &configKeyB},
     {.name = "key_start",         .type = CONFIG_TYPE_UINT, .uintValue = &configKeyStart},

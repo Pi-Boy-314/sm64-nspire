@@ -14,7 +14,11 @@
 #include "seq_ids.h"
 #include "sm64.h"
 
+#ifdef BENCHMARK
+#define PRESS_START_DEMO_TIMER 30 // benchmark build: start the attract demo almost immediately
+#else
 #define PRESS_START_DEMO_TIMER 800
+#endif
 
 #define STUB_LEVEL(textname, _1, _2, _3, _4, _5, _6, _7, _8) textname,
 #define DEFINE_LEVEL(textname, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10) textname,
@@ -47,6 +51,11 @@ int run_press_start_demo_timer(s32 timer) {
                 // start the demo. 800 frames has passed while
                 // player is idle on PRESS START screen.
 
+#ifdef BENCHMARK
+                if (gDemoInputListID >= gDemo.animDmaTable->count) {
+                    gDemoInputListID = 0; // bench_demo set out of range
+                }
+#endif
                 // start the Mario demo animation for the demo list.
                 load_patchable_table(&gDemo, gDemoInputListID);
 
