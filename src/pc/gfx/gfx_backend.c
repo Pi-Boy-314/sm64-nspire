@@ -571,9 +571,45 @@ static inline int span_wrap(int x, const int mask, const int mir, const int m) {
     return x > m ? m : x;
 }
 
-static inline int span_bits(const int64_t v) { // significant bits of |v|
-    const uint64_t a = v < 0 ? 0 - (uint64_t) v : (uint64_t) v;
-    return a ? 64 - __builtin_clzll(a) : 0;
+static inline uint64_t span_abs(const int64_t v) {
+    return v < 0 ? 0 - (uint64_t) v : (uint64_t) v;
+}
+
+// texel = floor(nu / d) and floor(nv / d), given n = clz(d) and rcp = span_recip32(d << n): half
+// of ~2^62 / (d << n), so it fits an int32 and one smull does each product
+static inline __attribute__((always_inline)) void span_texel(const int32_t nu, const int32_t nv,
+        const int n, const int32_t rcp, int *tx, int *ty) {
+    if (n <= 29) { // floor(nu / d) = (nu * rcp) >> (61 - n), from the high word
+        *tx = (int32_t) (((int64_t) nu * rcp) >> 32) >> (29 - n);
+        *ty = (int32_t) (((int64_t) nv * rcp) >> 32) >> (29 - n);
+    } else {
+        *tx = (int) (((int64_t) nu * rcp) >> (61 - n));
+        *ty = (int) (((int64_t) nv * rcp) >> (61 - n));
+    }
+}
+
+// Combine texel and shade (ca = 0xFF without shade alpha) and write one pixel, blended or not.
+static inline __attribute__((always_inline)) void span_put(uint32_t *const o, const uint32_t texel,
+        const int tex_on, const int ncol, const int blend, const uint32_t cr, const uint32_t cg,
+        const uint32_t cb, const uint32_t ca) {
+    uint32_t r, g, b, a;
+    if (tex_on) {
+        const Color4 tc = { .c = texel };
+        if (ncol) {
+            r = (tc.r * cr) >> 8; g = (tc.g * cg) >> 8; b = (tc.b * cb) >> 8; a = (tc.a * ca) >> 8;
+        } else {
+            r = tc.r; g = tc.g; b = tc.b; a = tc.a;
+        }
+    } else {
+        r = cr; g = cg; b = cb; a = ca;
+    }
+    if (blend) { // draw_pixel_blend
+        const uint32_t dst = *o, ia = 255 - a;
+        r = ((r * a) >> 8) + (((dst & 0xFF) * ia) >> 8);
+        g = ((g * a) >> 8) + ((((dst >> 8) & 0xFF) * ia) >> 8);
+        b = ((b * a) >> 8) + ((((dst >> 16) & 0xFF) * ia) >> 8);
+    }
+    *o = r | (g << 8) | (b << 16) | (a << 24);
 }
 
 static inline __attribute__((always_inline)) void span_draw(const fix64 *p, const Vector2 *dp,
@@ -589,10 +625,12 @@ static inline __attribute__((always_inline)) void span_draw(const fix64 *p, cons
         const int ci = 4 + 2 * tex_on;
         const fix64 p3_last = p[3] + dp[3].x * last;
         const fix64 w0 = p[3] == FIX_ONE ? FIX_ONE : fix_recip(p[3]);
-        const fix64 w1 = p3_last == FIX_ONE ? FIX_ONE : fix_recip(p3_last);
+        const fix64 w1 = dp[3].x == 0 ? w0 : p3_last == FIX_ONE ? FIX_ONE : fix_recip(p3_last);
         for (int k = 0; k < ncol; k++) {
             c[k] = span_colour(p[ci + k], w0);
-            dc[k] = span_step(span_colour(p[ci + k] + dp[ci + k].x * last, w1) - c[k], last);
+            if (dp[ci + k].x != 0 || dp[3].x != 0) { // else the same colour at both ends
+                dc[k] = span_step(span_colour(p[ci + k] + dp[ci + k].x * last, w1) - c[k], last);
+            }
         }
     }
 
@@ -607,59 +645,86 @@ static inline __attribute__((always_inline)) void span_draw(const fix64 *p, cons
         kt = t->cmt == WRAP_REPEAT ? mh : -1; it = t->cmt == WRAP_MIRROR ? -1 : 0;
         const int64_t nu0 = p[4] * t->w, nv0 = p[5] * t->h, d0 = p[3];
         const int64_t snu = dp[4].x * t->w, snv = dp[5].x * t->h, sd = dp[3].x;
-        int bits = span_bits(nu0);
-        const int64_t ends[5] = { nu0 + snu * last, nv0, nv0 + snv * last, d0, d0 + sd * last };
-        for (int k = 0; k < 5; k++) bits = imax(bits, span_bits(ends[k]));
+        // bit length of the OR of the magnitudes = the largest bit length
+        const uint64_t mag = span_abs(nu0) | span_abs(nu0 + snu * last) | span_abs(nv0)
+            | span_abs(nv0 + snv * last) | span_abs(d0) | span_abs(d0 + sd * last);
+        const int bits = mag ? 64 - __builtin_clzll(mag) : 0;
         const int sh = imax(0, bits - 30); // everything below 2^30 after the shift
         nu = (int32_t) (nu0 >> sh); nv = (int32_t) (nv0 >> sh); d = (int32_t) (d0 >> sh);
         dnu = (int32_t) (snu >> sh); dnv = (int32_t) (snv >> sh); dd = (int32_t) (sd >> sh);
     }
 
-    for (; len > 0; --len, ++idx) {
-        const int32_t zi = (int32_t) (zz >> 32);
-        const uint16_t uz = zi < 0 ? 0 : zi > 0xFFFF ? 0xFFFF : (uint16_t) zi;
-        if (!zt || uz <= z_buffer[idx]) {
-            uint32_t r, g, b, a;
-            if (tex_on) {
-                int tx = 0, ty = 0;
-                if (d > 0) {
-                    const int n = __builtin_clz((uint32_t) d); // >= 2
-                    // half of ~2^62 / (d << n), so it fits an int32 and one smull does each product
-                    const int32_t rcp = span_recip32((uint32_t) d << n);
-                    if (n <= 29) { // floor(nu / d) = (nu * rcp) >> (61 - n), from the high word
-                        tx = (int32_t) (((int64_t) nu * rcp) >> 32) >> (29 - n);
-                        ty = (int32_t) (((int64_t) nv * rcp) >> 32) >> (29 - n);
-                    } else {
-                        tx = (int) (((int64_t) nu * rcp) >> (61 - n));
-                        ty = (int) (((int64_t) nv * rcp) >> (61 - n));
-                    }
-                }
-                const Color4 tc = { .c = texels[span_wrap(ty, kt, it, mh) * tw + span_wrap(tx, ks, is, mw)] };
-                if (ncol) {
-                    r = (tc.r * (uint32_t) (c[0] >> 16)) >> 8;
-                    g = (tc.g * (uint32_t) (c[1] >> 16)) >> 8;
-                    b = (tc.b * (uint32_t) (c[2] >> 16)) >> 8;
-                    a = (tc.a * (ncol == 4 ? (uint32_t) (c[3] >> 16) : 0xFF)) >> 8;
-                } else {
-                    r = tc.r; g = tc.g; b = tc.b; a = tc.a;
-                }
-            } else {
-                r = c[0] >> 16; g = c[1] >> 16; b = c[2] >> 16;
-                a = ncol == 4 ? (uint32_t) (c[3] >> 16) : 0xFF;
+    // Frame buffer and depth through local pointers: the build uses -fno-strict-aliasing, so
+    // with the globals every pixel store made GCC reload gfx_output.
+    uint32_t *out = gfx_output + idx;
+    uint16_t *zb = z_buffer + idx;
+    const uint32_t *const out_end = out + len;
+
+    const bool cd_pos = d > 0;
+    const int cd_n = cd_pos ? __builtin_clz((uint32_t) d) : 0;
+    const int32_t cd_rcp = (tex_on && dd == 0 && cd_pos) ? span_recip32((uint32_t) d << cd_n) : 0;
+
+    // Skybox / 2D: no depth test or write, constant shade, constant 1/w, and every texel inside
+    // the texture (texel coordinates are monotonic along a span, so checking both ends is enough
+    // and no wrap is needed). Texel and colour maths are the same as in the general loop below.
+    if (tex_on && !zt && !zw && dd == 0 && cd_pos && cd_n <= 29
+            && (ncol == 0 || !(dc[0] | dc[1] | dc[2] | dc[3]))) {
+        int tx0, ty0, tx1, ty1;
+        span_texel(nu, nv, cd_n, cd_rcp, &tx0, &ty0);
+        span_texel(nu + dnu * last, nv + dnv * last, cd_n, cd_rcp, &tx1, &ty1);
+        if ((uint32_t) tx0 <= (uint32_t) mw && (uint32_t) tx1 <= (uint32_t) mw
+                && (uint32_t) ty0 <= (uint32_t) mh && (uint32_t) ty1 <= (uint32_t) mh) {
+            const int s = 29 - cd_n;
+            const uint32_t cr = c[0] >> 16, cg = c[1] >> 16, cb = c[2] >> 16;
+            const uint32_t ca = ncol == 4 ? (uint32_t) (c[3] >> 16) : 0xFF;
+            for (; out < out_end; ++out) {
+                const int tx = (int32_t) (((int64_t) nu * cd_rcp) >> 32) >> s;
+                const int ty = (int32_t) (((int64_t) nv * cd_rcp) >> 32) >> s;
+                span_put(out, texels[ty * tw + tx], tex_on, ncol, blend, cr, cg, cb, ca);
+                nu += dnu; nv += dnv;
             }
-            if (blend) { // draw_pixel_blend
-                const uint32_t dst = gfx_output[idx], ia = 255 - a;
-                r = ((r * a) >> 8) + (((dst & 0xFF) * ia) >> 8);
-                g = ((g * a) >> 8) + ((((dst >> 8) & 0xFF) * ia) >> 8);
-                b = ((b * a) >> 8) + ((((dst >> 16) & 0xFF) * ia) >> 8);
-            }
-            gfx_output[idx] = r | (g << 8) | (b << 16) | (a << 24);
-            if (zw) z_buffer[idx] = uz;
+            return;
         }
-        zz += dzz;
-        if (tex_on) { nu += dnu; nv += dnv; d += dd; }
-        _Pragma("GCC unroll 4") for (int k = 0; k < ncol; k++) c[k] += dc[k];
     }
+
+    // The general per-pixel loop, four ways. CONST_D = 1 when 1/w is the same at every pixel of
+    // the span (w == 1 geometry, or a plane whose depth doesn't change along the row): the
+    // reciprocal is taken once instead of per pixel. COMMON = 1 for the usual 3D case, depth test
+    // and write on and a texture that repeats both ways: no flag checks, and the wrap is a mask
+    // (what span_wrap does for repeat). Same results in every variant; fewer live values.
+#define SPAN_LOOP(CONST_D, COMMON) \
+    for (; out < out_end; ++out, ++zb) {                                                           \
+        const int32_t zi = (int32_t) (zz >> 32);                                                   \
+        const uint16_t uz = zi < 0 ? 0 : zi > 0xFFFF ? 0xFFFF : (uint16_t) zi;                     \
+        if ((!(COMMON) && !zt) || uz <= *zb) {                                                     \
+            uint32_t texel = 0;                                                                    \
+            if (tex_on) {                                                                          \
+                int tx = 0, ty = 0;                                                                \
+                if (CONST_D) {                                                                     \
+                    if (cd_pos) span_texel(nu, nv, cd_n, cd_rcp, &tx, &ty);                        \
+                } else if (d > 0) {                                                                \
+                    const int n = __builtin_clz((uint32_t) d); /* >= 2 */                          \
+                    span_texel(nu, nv, n, span_recip32((uint32_t) d << n), &tx, &ty);              \
+                }                                                                                  \
+                texel = (COMMON) ? texels[(ty & mh) * tw + (tx & mw)]                              \
+                    : texels[span_wrap(ty, kt, it, mh) * tw + span_wrap(tx, ks, is, mw)];          \
+            }                                                                                      \
+            span_put(out, texel, tex_on, ncol, blend, c[0] >> 16, c[1] >> 16, c[2] >> 16,          \
+                     ncol == 4 ? (uint32_t) (c[3] >> 16) : 0xFF);                                  \
+            if ((COMMON) || zw) *zb = uz;                                                          \
+        }                                                                                          \
+        zz += dzz;                                                                                 \
+        if (tex_on) { nu += dnu; nv += dnv; if (!CONST_D) d += dd; }                               \
+        _Pragma("GCC unroll 4") for (int k = 0; k < ncol; k++) c[k] += dc[k];                      \
+    }
+
+    const bool common = tex_on && zt && zw && t->cms == WRAP_REPEAT && t->cmt == WRAP_REPEAT;
+    if (tex_on && dd == 0) {
+        if (common) { SPAN_LOOP(1, 1) } else { SPAN_LOOP(1, 0) }
+    } else {
+        if (common) { SPAN_LOOP(0, 1) } else { SPAN_LOOP(0, 0) }
+    }
+#undef SPAN_LOOP
 }
 
 #define DEFINE_SPAN_FUNC(name, tex_on, ncol) \
@@ -690,13 +755,14 @@ DEFINE_SPAN_FUNC(rgba, 0, 4)
         /* do scissor clipping */ \
         x = imax(r_clip.x0, FIX_2_INT(x_a)); \
         x_end = imin(r_clip.x1, FIX_2_INT(x_b)); \
+        if (x < x_end) { /* else nothing to draw: skip the prestep too */ \
         /* do X subpixel prestepping */ \
         dx = FIX_ONE - (x_a - INT_2_FIX(x)); \
         _Pragma("GCC unroll 16") for (i = 2; i < nprops; ++i) p[i] = p_a[i] + fix_mult_frac(dx, dp[i].x); \
         idx = scr_width * (scr_height - y - 1) + x; \
         /* draw scanline from current x_a to current x_b */ \
         if (span_fn) { \
-            if (x < x_end) span_fn(p, dp, x, x_end, idx); \
+            span_fn(p, dp, x, x_end, idx); \
         } else while (x++ < x_end) { \
             uz = u16clamp(FIX_2_INT(p[2] * 65535 + z_offset)); \
             if (!z_test || uz <= z_buffer[idx]) { \
@@ -707,6 +773,7 @@ DEFINE_SPAN_FUNC(rgba, 0, 4)
             /* unrolled: as a loop this was ~13 cycles per prop per pixel on the ARM926 */ \
             _Pragma("GCC unroll 16") for (i = 2; i < nprops; ++i) p[i] += dp[i].x; \
             ++idx; \
+        } \
         } \
         /* advance scanline start and end and prop starts */ \
         x_a += dxdy_a; \

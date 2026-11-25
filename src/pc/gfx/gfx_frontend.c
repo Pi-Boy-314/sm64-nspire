@@ -70,7 +70,22 @@ struct LoadedVertex {
     fix64 u, v;
     struct RGBA color;
     uint8_t clip_rej;
+    uint8_t proj_ok; // sx, sy, sz, w_inv below are valid; clear whenever x, y, z or w change
+    fix64 sx, sy, sz, w_inv; // projected position as gfx_push_triangle needs it, see gfx_vertex_proj
 };
+
+// Perspective divide of one vertex, kept with the vertex: a vertex is usually shared by several
+// triangles, and gfx_sp_tri1 (culling) and gfx_push_triangle both need it.
+static inline void gfx_vertex_proj(struct LoadedVertex *v) {
+    if (!v->proj_ok) {
+        const fix64 w_inv = fix_recip(v->w);
+        v->sx = fix_mult(v->x, w_inv);
+        v->sy = fix_mult(v->y, w_inv);
+        v->sz = fix_mult((v->z + v->w) >> 1, w_inv);
+        v->w_inv = w_inv;
+        v->proj_ok = 1;
+    }
+}
 
 struct TextureHashmapNode {
     struct TextureHashmapNode *next;
@@ -723,6 +738,7 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
         d->y = y;
         d->z = z;
         d->w = w;
+        d->proj_ok = 0;
 
         if (configEnableFog && (rsp.geometry_mode & G_FOG)) {
             // fog = (z / w) * fog_mul + fog_offset, as in the upstream PC port: |w| < 0.001 is
@@ -753,7 +769,21 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const Vtx *verti
 static inline struct ColorCombiner *gfx_pick_combiner(bool *out_use_fog, bool *out_use_alpha) {
     uint32_t cc_id = rdp.combine_mode;
 
-    bool use_alpha = (rdp.other_mode_l & (G_BL_A_MEM << 18)) == 0;
+    // Blender inputs of the cycle that writes the frame buffer: in 2-cycle mode that is cycle 2
+    // (GBL_c2, 2 bits below GBL_c1); cycle 1 then holds G_RM_FOG_SHADE_A or G_RM_PASS, whose
+    // m2b (1-alpha or 1) made every 2-cycle surface, opaque or not, count as alpha blended.
+    const uint32_t cycle_type = rdp.other_mode_h & (3U << G_MDSFT_CYCLETYPE);
+    const uint32_t blender = cycle_type == G_CYC_2CYCLE ? rdp.other_mode_l << 2 : rdp.other_mode_l;
+    bool use_alpha = (blender & (G_BL_A_MEM << 18)) == 0;
+    // Both colour inputs CLR_IN (RM_OPA_SURF, used by the skybox and background layer): the
+    // output is the pixel colour whatever the weights, so nothing to blend, although m2b
+    // (G_BL_1) passes the test above. Copy/fill mode and alpha compare keep the old behaviour.
+    if (use_alpha && (cycle_type == G_CYC_1CYCLE || cycle_type == G_CYC_2CYCLE)
+        && (rdp.other_mode_l & (3U << G_MDSFT_ALPHACOMPARE)) == G_AC_NONE
+        && ((blender >> 30) & 3) == G_BL_CLR_IN && ((blender >> 22) & 3) == G_BL_CLR_IN
+        && (((blender >> 18) & 3) == G_BL_1 || ((blender >> 18) & 3) == G_BL_0)) { // OPA_SURF / PASS only
+        use_alpha = false;
+    }
     const bool use_fog = configEnableFog && (rdp.other_mode_l >> 30) == G_BL_CLR_FOG;
     const bool texture_edge = (rdp.other_mode_l & CVG_X_ALPHA) == CVG_X_ALPHA;
     const bool use_noise = (rdp.other_mode_l & G_AC_DITHER) == G_AC_DITHER;
@@ -811,8 +841,9 @@ static inline bool gfx_update_textures(const bool used_textures[2], const bool l
     return used_textures[0] || used_textures[1];
 }
 
-static inline void gfx_push_triangle(const struct LoadedVertex *restrict v1, const struct LoadedVertex *restrict v2, const struct LoadedVertex *restrict v3) {
-    const struct LoadedVertex *v_arr[3] = {v1, v2, v3};
+static inline void gfx_push_triangle(struct LoadedVertex *v1, struct LoadedVertex *v2, struct LoadedVertex *v3) {
+    // no restrict: it writes the vertices' projection cache, and a display list may repeat an index
+    struct LoadedVertex *v_arr[3] = {v1, v2, v3};
 
     const bool depth_test = (rsp.geometry_mode & G_ZBUFFER) == G_ZBUFFER;
     if (depth_test != rendering_state.depth_test) {
@@ -865,14 +896,11 @@ static inline void gfx_push_triangle(const struct LoadedVertex *restrict v1, con
     const fix64 tex_height_inv = use_texture ? fix_recip(INT_2_FIX(tex_height)) : 0;
 
     for (int i = 0; i < 3; i++) {
-        const fix64 w = v_arr[i]->w;
-        const fix64 w_inv = fix_recip(w);
-        buf_vbo[buf_vbo_len++] = fix_mult(v_arr[i]->x, w_inv);
-        buf_vbo[buf_vbo_len++] = fix_mult(v_arr[i]->y, w_inv);
-        buf_vbo[buf_vbo_len++] = fix_mult(
-                                    (v_arr[i]->z + w) >> 1,
-                                    w_inv
-        );
+        gfx_vertex_proj(v_arr[i]);
+        const fix64 w_inv = v_arr[i]->w_inv;
+        buf_vbo[buf_vbo_len++] = v_arr[i]->sx;
+        buf_vbo[buf_vbo_len++] = v_arr[i]->sy;
+        buf_vbo[buf_vbo_len++] = v_arr[i]->sz;
 
         buf_vbo[buf_vbo_len++] = w_inv; // store inverted W right away to save softrast the trouble
 
@@ -974,10 +1002,13 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
 
     // Not zero-initialised: that cleared all 24 vertices (a memset) for every clipped triangle,
     // and only the vertices written below are ever read.
-    struct LoadedVertex v_buf[2][12];
-    v_buf[0][0] = *v1;
-    v_buf[0][1] = *v2;
-    v_buf[0][2] = *v3;
+    // Polygons as lists of pointers: the input vertices are never copied (copying a LoadedVertex
+    // is a memcpy call now that it holds the projection cache), and their cached projection is
+    // shared with the other triangles that use them. A convex polygon crosses each plane at most
+    // twice, so 6 planes make at most 12 new vertices and a polygon has at most 3 + 6 corners.
+    struct LoadedVertex new_v[12];
+    int n_new = 0;
+    struct LoadedVertex *v_buf[2][12] = { { v1, v2, v3 } };
     int v_num[2] = { 3, 0 };
     int v_idx = 0;
 
@@ -987,22 +1018,23 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
 
         const int num_verts = v_num[v_idx];
         const int outidx = !v_idx;
-        const struct LoadedVertex *v_in = v_buf[v_idx];
-        struct LoadedVertex *v_out = v_buf[outidx];
+        struct LoadedVertex *const *v_in = v_buf[v_idx];
+        struct LoadedVertex **v_out = v_buf[outidx];
         const int *plane = c_planes[plane_idx];
 
         for (int i = 0; i < num_verts; ++i) {
-            const struct LoadedVertex *vthis = &v_in[i];
-            const struct LoadedVertex *vnext = &v_in[(i + 1) % num_verts];
+            struct LoadedVertex *vthis = v_in[i];
+            const struct LoadedVertex *vnext = v_in[(i + 1) % num_verts];
             const fix64 d1 = plane[0] * vthis->x + plane[1] * vthis->y + plane[2] * vthis->z + vthis->w;
             const fix64 d2 = plane[0] * vnext->x + plane[1] * vnext->y + plane[2] * vnext->z + vnext->w;
             const bool this_in = d1 > 0;
             const bool next_in = d2 > 0;
             // current is inside clipping plane, push it into output
-            if (this_in) v_out[v_num[outidx]++] = *vthis;
+            if (this_in) v_out[v_num[outidx]++] = vthis;
             // one of the vertices is outside, clip the edge and push intersection
             if (this_in ^ next_in) {
-                struct LoadedVertex *xv = &v_out[v_num[outidx]++];
+                struct LoadedVertex *xv = &new_v[n_new++];
+                v_out[v_num[outidx]++] = xv;
                 if (this_in) {
                     fix64 t = fix_div(d1, d1 - d2);
                     if (t > FIX_ONE) t = FIX_ONE; // fix_div can be 1 ulp high; t > 1 wraps rgba_lerp
@@ -1010,6 +1042,7 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
                     xv->y = fix_lerp(vthis->y, vnext->y, t);
                     xv->z = fix_lerp(vthis->z, vnext->z, t);
                     xv->w = fix_lerp(vthis->w, vnext->w, t);
+                    xv->proj_ok = 0;
                     xv->u = fix_lerp(vthis->u, vnext->u, t);
                     xv->v = fix_lerp(vthis->v, vnext->v, t);
                     xv->color = rgba_lerp(vthis->color, vnext->color, t);
@@ -1021,6 +1054,7 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
                     xv->y = fix_lerp(vnext->y, vthis->y, t);
                     xv->z = fix_lerp(vnext->z, vthis->z, t);
                     xv->w = fix_lerp(vnext->w, vthis->w, t);
+                    xv->proj_ok = 0;
                     xv->u = fix_lerp(vnext->u, vthis->u, t);
                     xv->v = fix_lerp(vnext->v, vthis->v, t);
                     xv->color = rgba_lerp(vnext->color, vthis->color, t);
@@ -1037,9 +1071,9 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
 
     // make a triangle fan
     const int n = v_num[v_idx] - 1;
-    const struct LoadedVertex *in = v_buf[v_idx];
+    struct LoadedVertex *const *in = v_buf[v_idx];
     for (int i = 1; i < n; ++i)
-        gfx_push_triangle(in + 0, in + i, in + i + 1);
+        gfx_push_triangle(in[0], in[i], in[i + 1]);
 
     return true;
 }
@@ -1058,9 +1092,16 @@ static void gfx_sp_tri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx) {
     }
 
     if ((rsp.geometry_mode & G_CULL_BOTH) != 0) {
-        const fix64 x1 = fix_div(v1->x, v1->w), y1 = fix_div(v1->y, v1->w);
-        const fix64 x2 = fix_div(v2->x, v2->w), y2 = fix_div(v2->y, v2->w);
-        const fix64 x3 = fix_div(v3->x, v3->w), y3 = fix_div(v3->y, v3->w);
+        fix64 x1, y1, x2, y2, x3, y3;
+        if (v1->w > 0 && v2->w > 0 && v3->w > 0) {
+            // the usual case: the projected positions gfx_push_triangle will use anyway
+            gfx_vertex_proj(v1); gfx_vertex_proj(v2); gfx_vertex_proj(v3);
+            x1 = v1->sx; y1 = v1->sy; x2 = v2->sx; y2 = v2->sy; x3 = v3->sx; y3 = v3->sy;
+        } else { // a vertex at or behind the eye (fix_recip doesn't do w <= 0)
+            x1 = fix_div(v1->x, v1->w); y1 = fix_div(v1->y, v1->w);
+            x2 = fix_div(v2->x, v2->w); y2 = fix_div(v2->y, v2->w);
+            x3 = fix_div(v3->x, v3->w); y3 = fix_div(v3->y, v3->w);
+        }
         fix64 dx1 = x1 - x2;
         fix64 dy1 = y1 - y2;
         fix64 dx2 = x3 - x2;
@@ -1388,21 +1429,25 @@ static void gfx_draw_rectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lr
     ul->y = ulyf;
     ul->z = -1.0f;
     ul->w = 1.0f;
+    ul->proj_ok = 0;
 
     ll->x = ulxf;
     ll->y = lryf;
     ll->z = -1.0f;
     ll->w = 1.0f;
+    ll->proj_ok = 0;
 
     lr->x = lrxf;
     lr->y = lryf;
     lr->z = -1.0f;
     lr->w = 1.0f;
+    lr->proj_ok = 0;
 
     ur->x = lrxf;
     ur->y = ulyf;
     ur->z = -1.0f;
     ur->w = 1.0f;
+    ur->proj_ok = 0;
 
     // The coordinates for texture rectangle shall bypass the viewport setting
     struct XYWidthHeight default_viewport = {0, 0, gfx_current_dimensions.width, gfx_current_dimensions.height};
