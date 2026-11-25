@@ -26,7 +26,7 @@ The results are shown on screen and saved next to the game as `sm64_bench.txt.tn
 | `bench_warmup` | 30 | Ticks drawn but not measured (skips the fade-in) |
 | `bench_ticks` | 600 | Max ticks measured; stops earlier if the demo ends |
 | `bench_dump_frames` | false | Save ticks 60/240/420 as `sm64_bench_NNN.ppm.tns` images |
-| `enable_120p_mode`, `draw_sky`, `enable_fog` | | Same as in the normal game |
+| `resolution`, `draw_sky`, `enable_fog`, ... | | Same as in the normal game (see [SETTINGS.md](SETTINGS.md)) |
 
 `frameskip` is ignored; every tick is drawn.
 

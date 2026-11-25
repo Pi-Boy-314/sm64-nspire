@@ -1,5 +1,7 @@
 import sys, re, os
-import os; root = os.environ.get('SP', os.path.expanduser('~/SM64-Nspire/bench-work')) + '/armsim'
+# sum.py NAME...: million ARM instructions per drawn frame for armbench.sh runs
+repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+root = os.environ.get('SP', os.path.join(repo, 'bench-work')) + '/armsim'
 for v in sys.argv[1:]:
     out = [v.ljust(8)]
     for r in (120, 240):

@@ -78,3 +78,5 @@ SM64CONF.TXT
 !/assets/**/*custom*/**/*.bin
 
 *.vs
+# Benchmark output: contains game imagery, never commit
+/bench-work/

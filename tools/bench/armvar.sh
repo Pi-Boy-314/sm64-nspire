@@ -1,6 +1,6 @@
 #!/bin/sh
 # armvar.sh NAME ELF: runs the 4 demos on QEMU for each settings variant into $SP/armvar/NAME/VARIANT_dN
-SP=${SP:-$HOME/SM64-Nspire/bench-work}
+. "$(dirname "$0")/common.sh"
 run() { # variant "settings lines"
   for dm in 0 1 2 3; do (
     d=$SP/armvar/$NAME/$1_d$dm; mkdir -p $d; cd $d
