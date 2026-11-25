@@ -527,7 +527,7 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
         x_end = imin(r_clip.x1, FIX_2_INT(x_b)); \
         /* do X subpixel prestepping */ \
         dx = FIX_ONE - (x_a - INT_2_FIX(x)); \
-        for (i = 2; i < nprops; ++i) p[i] = p_a[i] + fix_mult(dx, dp[i].x); \
+        _Pragma("GCC unroll 16") for (i = 2; i < nprops; ++i) p[i] = p_a[i] + fix_mult(dx, dp[i].x); \
         idx = scr_width * (scr_height - y - 1) + x; \
         /* draw scanline from current x_a to current x_b */ \
          while (x++ < x_end) { \
@@ -537,13 +537,14 @@ static void draw_pixel_blend_edge_zwrite(const int idx, const uint16_t z, Color4
                 w = p[3] == FIX_ONE ? FIX_ONE : fix_recip(p[3]); /*  the combiner will multiply by w any props it needs to persp correct */ \
                 draw_fn(idx, uz, cur_shader->combine(w, p + 4)); \
             } \
-            for (i = 2; i < nprops; ++i) p[i] += dp[i].x; \
+            /* unrolled: as a loop this was ~13 cycles per prop per pixel on the ARM926 */ \
+            _Pragma("GCC unroll 16") for (i = 2; i < nprops; ++i) p[i] += dp[i].x; \
             ++idx; \
         } \
         /* advance scanline start and end and prop starts */ \
         x_a += dxdy_a; \
         x_b += dxdy_b; \
-        for (i = 2; i < nprops; ++i) p_a[i] += dpdy_a[i]; \
+        _Pragma("GCC unroll 16") for (i = 2; i < nprops; ++i) p_a[i] += dpdy_a[i]; \
         ++y; \
     }
 

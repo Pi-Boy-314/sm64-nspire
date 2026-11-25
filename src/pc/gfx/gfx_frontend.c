@@ -859,6 +859,10 @@ static inline void gfx_push_triangle(const struct LoadedVertex *restrict v1, con
     const bool use_texture = gfx_update_textures(used_textures, linear_filter);
     const uint32_t tex_width = (rdp.texture_tile.lrs - rdp.texture_tile.uls + 4) / 4;
     const uint32_t tex_height = (rdp.texture_tile.lrt - rdp.texture_tile.ult + 4) / 4;
+    // One reciprocal per triangle rather than a 64-bit software division per coordinate.
+    // Exact for power-of-two sizes.
+    const fix64 tex_width_inv = use_texture ? fix_recip(INT_2_FIX(tex_width)) : 0;
+    const fix64 tex_height_inv = use_texture ? fix_recip(INT_2_FIX(tex_height)) : 0;
 
     for (int i = 0; i < 3; i++) {
         const fix64 w = v_arr[i]->w;
@@ -880,8 +884,8 @@ static inline void gfx_push_triangle(const struct LoadedVertex *restrict v1, con
                 u += FIX_ONE_HALF;
                 v += FIX_ONE_HALF;
             }
-            buf_vbo[buf_vbo_len++] = fix_mult(u / tex_width, w_inv);
-            buf_vbo[buf_vbo_len++] = fix_mult(v / tex_height, w_inv);
+            buf_vbo[buf_vbo_len++] = fix_mult(fix_mult(u, tex_width_inv), w_inv);
+            buf_vbo[buf_vbo_len++] = fix_mult(fix_mult(v, tex_height_inv), w_inv);
         }
 
         if (use_fog) {
