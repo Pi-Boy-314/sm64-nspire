@@ -34,7 +34,7 @@ The screen remembers the page and row you were on while the game is running.
 | Setting (screen / file) | What it does |
 |---|---|
 | 3D resolution / `resolution` | Resolution of the 3D world. Lower ones are stretched to fill the screen. `320x240` is sharp but much slower. `160x120` is much faster (roughly 2 to 3 times) but blocky. `80x60` is the fastest and very blocky. The HUD (lives, coins, stars) follows Sharp HUD. |
-| Textures / `textures` | **Flat (fastest)** (`flat`): walls, floors and other solid surfaces in one plain colour each (their texture's average colour). Much faster; looks like a very early 3D game. Trees, fences, coins, text and the sky keep their textures. **Normal** (`normal`): as in the original, with sharp square pixels. **Smooth (slow)** (`smooth`): blurred slightly, like on the N64, about 3 times slower at 320x240. |
+| Textures / `textures` | **Flat (fastest)** (`flat`): walls, floors and other solid surfaces in one plain color each (their texture's average color). Much faster; looks like a very early 3D game. Trees, fences, coins, text and the sky keep their textures. **Normal** (`normal`): as in the original, with sharp square pixels. **Smooth (slow)** (`smooth`): blurred slightly, like on the N64, about 3 times slower at 320x240. |
 | Sky / `draw_sky` | Off shows a plain black sky. Faster, since the sky covers much of the screen. |
 | Fog / `enable_fog` | Distance fog in the levels that use it (Bob-omb Battlefield, for example). Closer to the original look, but fogged areas draw more slowly. |
 | Shadows / `draw_shadows` | Shadows under Mario, enemies and items. Off is a little faster, but jumps are harder to judge. |

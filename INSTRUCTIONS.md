@@ -116,19 +116,19 @@ cd ~
 ```
 
 ```bash
-git clone https://github.com/Pi-Boy-314/sm64-nsp.git
+git clone https://github.com/Pi-Boy-314/sm64-nspire.git
 ```
 
 If you're building from a different fork, use its link instead: copy it from the green **Code** button.
 
-Open the new folder: `explorer.exe ~/sm64-nsp` on WSL, `open ~/sm64-nsp` on macOS. Copy your ROM into it and **rename it to `baserom.us.z64`**. The build looks for exactly that name.
+Open the new folder: `explorer.exe ~/sm64-nspire` on WSL, `open ~/sm64-nspire` on macOS. Copy your ROM into it and **rename it to `baserom.us.z64`**. The build looks for exactly that name.
 
 The ROM has to be the US version in `.z64` format. Files ending in `.n64` or `.v64` store the data in a different order: convert them to `.z64` with an N64 ROM converter first. The build checks the ROM and stops with a clear message if it's the wrong one.
 
 ## 5. Build the game
 
 ```bash
-cd ~/sm64-nsp && make -j4
+cd ~/sm64-nspire && make -j4
 ```
 
 `-j4` builds 4 files at a time, which is faster. The first build extracts the game's assets from the ROM, so it takes several minutes.
@@ -145,7 +145,7 @@ Run `make clean` to delete the build and start over. Your ROM and the extracted 
 
 1. **Install Ndless** on the calculator, following the instructions on the [Ndless page](https://github.com/ndless-nspire/Ndless) for your model and OS version.
 2. **Make a folder** called `sm64` on the calculator, in My Documents.
-3. **Send `sm64.us.f3dex2.tns`** to that folder with the TI-Nspire software (or TiLP). To find it, open `build/us_nsp`: `explorer.exe ~/sm64-nsp/build/us_nsp` on WSL, `open ~/sm64-nsp/build/us_nsp` on macOS. You can rename it, for example to `sm64.tns`, but keep the `.tns` ending.
+3. **Send `sm64.us.f3dex2.tns`** to that folder with the TI-Nspire software (or TiLP). To find it, open `build/us_nsp`: `explorer.exe ~/sm64-nspire/build/us_nsp` on WSL, `open ~/sm64-nspire/build/us_nsp` on macOS. You can rename it, for example to `sm64.tns`, but keep the `.tns` ending.
 4. **Unplug the USB cable.** The game runs slower while it's connected.
 5. **Open the file** from My Documents to start the game.
 
@@ -164,7 +164,7 @@ The game saves your progress to `sm64_save.bin.tns` and your settings to `sm64_c
 
 ## 8. Updating to a newer version
 
-1. Get the new code: `cd ~/sm64-nsp && git pull`
+1. Get the new code: `cd ~/sm64-nspire && git pull`
 2. Build again with `make -j4`. Only the changed files are rebuilt.
 3. Send the new `.tns` to the calculator, replacing the old one.
 
@@ -292,7 +292,7 @@ Then run `build_asan/us_nsp_host/sm64.us.f3dex2` from a folder with a benchmark 
 
 | Problem | Fix |
 |---|---|
-| `Failed to open baserom.us.z64!` or `Failed to extract assets` | The ROM is missing or misnamed. Put it in the `sm64-nsp` folder, named exactly `baserom.us.z64`. |
+| `Failed to open baserom.us.z64!` or `Failed to extract assets` | The ROM is missing or misnamed. Put it in the `sm64-nspire` folder, named exactly `baserom.us.z64`. |
 | `baserom.us.z64 has the wrong hash!` | The ROM isn't the US `.z64` version, or it's byte-swapped (`.n64` / `.v64`). Convert it to `.z64`, or use a US ROM. |
 | `nspire-gcc: command not found` or `arm-none-eabi-gcc: No such file` | The toolchain isn't on your PATH. Run the `echo 'export PATH=...` line from [step 3](#3-build-the-ndless-toolchain) for your system, then open a new terminal. |
 | On macOS: `brew: command not found` | Run the "Next steps" commands Homebrew printed when it finished installing, then open a new terminal. |
