@@ -122,7 +122,10 @@ uint32_t *gfx_output;
 // this is set in the drawing functions
 static draw_fn_t draw_fn;
 
-static struct ShaderProgram shader_program_pool[0];
+// 26 programs are made at startup (precomp_shaders in gfx_frontend.c), then at most one per
+// colour combiner (64 of those), so 96 is always enough. sm64-port uses 64.
+#define SHADER_POOL_MAX 96
+static struct ShaderProgram shader_program_pool[SHADER_POOL_MAX];
 static uint8_t shader_program_pool_size;
 static struct ShaderProgram *cur_shader = NULL;
 
@@ -720,6 +723,9 @@ static struct ShaderProgram *gfx_soft_create_and_load_new_shader(uint32_t shader
     struct CCFeatures ccf;
     gfx_cc_get_features(shader_id, &ccf);
 
+    // Can't fill up (see SHADER_POOL_MAX), but never write past the end: reuse the last slot.
+    if (shader_program_pool_size == SHADER_POOL_MAX)
+        shader_program_pool_size--;
     struct ShaderProgram *prg = &shader_program_pool[shader_program_pool_size++];
 
     prg->shader_id = shader_id;
@@ -778,15 +784,12 @@ static struct ShaderProgram *gfx_soft_create_and_load_new_shader(uint32_t shader
 
     return prg;
 }
-#pragma GCC push_options // BANDAID FIX: compiling this function with any other optimization level crashes the emulator for some reason
-#pragma GCC optimize("-Og")
 static struct ShaderProgram *gfx_soft_lookup_shader(uint32_t shader_id) {
     for (size_t i = 0; i < shader_program_pool_size; i++)
         if (shader_program_pool[i].shader_id == shader_id)
             return &shader_program_pool[i];
     return NULL;
 }
-#pragma GCC pop_options
 
 static void gfx_soft_shader_get_info(struct ShaderProgram *prg, uint8_t *num_inputs, bool used_textures[2]) {
     *num_inputs = prg->cc.num_inputs;
