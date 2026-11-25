@@ -972,7 +972,12 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
 
     if (!clip_or && clip_and) return false; // triangle fully in frustum
 
-    struct LoadedVertex v_buf[2][12] = { { *v1, *v2, *v3 } };
+    // Not zero-initialised: that cleared all 24 vertices (a memset) for every clipped triangle,
+    // and only the vertices written below are ever read.
+    struct LoadedVertex v_buf[2][12];
+    v_buf[0][0] = *v1;
+    v_buf[0][1] = *v2;
+    v_buf[0][2] = *v3;
     int v_num[2] = { 3, 0 };
     int v_idx = 0;
 
@@ -1019,6 +1024,7 @@ static inline bool gfx_clip_triangle(struct LoadedVertex *v1, struct LoadedVerte
                     xv->u = fix_lerp(vnext->u, vthis->u, t);
                     xv->v = fix_lerp(vnext->v, vthis->v, t);
                     xv->color = rgba_lerp(vnext->color, vthis->color, t);
+                    xv->clip_rej = 0;
                 }
             }
         }
