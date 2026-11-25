@@ -91,6 +91,20 @@ static void dump_frame(uint32_t tick, uint32_t w, uint32_t h) {
     fclose(f);
 }
 
+#ifdef HOST_BUILD
+// Per-tick hash of that frame alone (host build only), for locating the first differing frame.
+static FILE *sTickHashes;
+static void write_tick_hash(uint32_t tick, uint32_t num_pixels) {
+    if (sTickHashes == NULL) {
+        sTickHashes = fopen("sm64_bench_hashes.txt", "w");
+        if (sTickHashes == NULL) {
+            return;
+        }
+    }
+    fprintf(sTickHashes, "%lu %08lx\n", (unsigned long) tick, (unsigned long) hash_frame(2166136261u, num_pixels));
+}
+#endif
+
 static void show_message_and_wait(const char *msg) {
     nio_console console;
     if (!nio_init(&console, NIO_MAX_COLS, NIO_MAX_ROWS, 0, 0, NIO_COLOR_WHITE, NIO_COLOR_BLACK, true)) {
@@ -153,6 +167,9 @@ void bench_run(void (*run_one_game_iter)(void), bool *skip_frame) {
 
         // Outside the timed region: prof_frame_begin() restarts the clock next tick.
         hash = hash_frame(hash, w * h);
+#ifdef HOST_BUILD
+        write_tick_hash(n, w * h);
+#endif
         if (configBenchDump && (n == 60 || n == 240 || n == 420)) {
             dump_frame(n, w, h);
         }
@@ -209,6 +226,12 @@ void bench_run(void (*run_one_game_iter)(void), bool *skip_frame) {
             ms(s2, 1000000000u / frame_us), (unsigned long) speed_pct);
     }
     out("frame hash %08lx\n", (unsigned long) hash);
+#ifdef HOST_BUILD
+    if (sTickHashes != NULL) {
+        fclose(sTickHashes);
+        sTickHashes = NULL;
+    }
+#endif
 
     if (sOut != NULL) {
         fclose(sOut);

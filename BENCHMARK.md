@@ -49,3 +49,12 @@ identical settings.
 
 Timings from the Firebird emulator don't match real hardware, so only use them to compare
 builds against each other. Real numbers have to come from a real calculator.
+
+## Checking output on a Mac or PC (`make HOST=1`)
+
+`make HOST=1` builds a headless native version of the same NSP code (renderer included) with
+clang, using the stand-in Ndless headers in `tools/host_shim/`. Its output is
+`build/us_nsp_host/sm64.us.f3dex2`. Run it from a folder that has a `sm64_config.txt.tns`; it
+plays the demo and writes the same files as the calculator build, plus `sm64_bench_hashes.txt`
+with one hash per frame, so you can find the first frame where two builds differ. Its timings
+say nothing about the calculator; use it to check that a change draws the same picture.

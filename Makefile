@@ -26,6 +26,8 @@ TARGET_DOS ?= 0
 
 # NSP
 TARGET_NSP ?= 1
+# HOST=1: headless native build of the NSP code paths (see tools/host_shim); implies BENCH=1
+HOST ?= 0
 NSP_PREFIX := nspire-
 
 # Compiler to use (ido or gcc)
@@ -234,7 +236,7 @@ ifeq ($(TARGET_WEB),1)
   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_web
 else
   ifeq ($(TARGET_NSP),1)
-	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_nsp$(if $(filter 1,$(BENCH)),_bench)
+	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_nsp$(if $(filter 1,$(BENCH)),_bench)$(if $(filter 1,$(HOST)),_host)
   else
 	BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
   endif
@@ -511,6 +513,11 @@ ifeq ($(TARGET_NSP), 1)
   OBJCOPY := arm-none-eabi-objcopy
   # Use GNU cpp from the toolchain; macOS's `cpp` is clang, which mangles the text/level preprocessing
   CPP := arm-none-eabi-cpp -P
+  ifeq ($(HOST),1)
+    CC := clang
+    LD := clang
+    CXX := clang++
+  endif
 endif
 
 PYTHON := python3
@@ -540,6 +547,11 @@ ifeq ($(TARGET_NSP),1)
 	ifeq ($(BENCH),1)
 		GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
 		PLATFORM_CFLAGS += -DBENCHMARK -DGIT_HASH=\"$(GIT_HASH)\"
+	endif
+	ifeq ($(HOST),1)
+		GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+		PLATFORM_CFLAGS := -DTARGET_NSP -DHOST_BUILD -DBENCHMARK -DGIT_HASH=\"$(GIT_HASH)\" -I tools/host_shim -g
+		PLATFORM_LDFLAGS := -lm
 	endif
 endif
 
@@ -655,7 +667,11 @@ ifeq ($(COMPARE),1)
 	@$(SHA1SUM) -c $(TARGET).sha1 || (echo 'The build succeeded, but did not match the official ROM. This is expected if you are making changes to the game.\nTo silence this message, use "make COMPARE=0"'. && false)
 endif
 else
+ifeq ($(HOST),1)
+all: $(EXE)
+else
 all: $(EXE).tns
+endif
 endif
 
 clean:
@@ -917,6 +933,12 @@ $(EXE).elf: $(O_FILES) $(MIO0_FILES:.mio0=.o) $(ULTRA_O_FILES) $(GODDARD_O_FILES
 	$(LD) -L $(BUILD_DIR) -o $@ $(O_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LDFLAGS) 
 
 ZEHNFLAGS := --name "sm64" --uses-lcd-blit 1 --240x320-support 1 --color-support 1 --32MB-support 0 --compress
+
+ifeq ($(HOST),1)
+# Native executable: the .elf link output is already runnable on the host
+$(EXE): $(EXE).elf
+	cp $< $@
+endif
 
 $(EXE).tns: $(EXE).elf
 	arm-none-eabi-strip --strip-unneeded $^

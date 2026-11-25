@@ -1,3 +1,28 @@
+#ifdef HOST_BUILD
+// Host build: ticks are microseconds from CLOCK_MONOTONIC.
+#include <stdio.h>
+#include <time.h>
+#include "timer.h"
+
+static uint64_t sBase, sStopAt;
+static int sRunning;
+static uint64_t now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000000u + ts.tv_nsec / 1000u;
+}
+static uint64_t elapsed_us(void) { return (sRunning ? now_us() : sStopAt) - sBase; }
+
+void tmr_init(void) { tmr_reset(); tmr_start(); }
+void tmr_stop(void) { if (sRunning) { sStopAt = now_us(); sRunning = 0; } }
+void tmr_start(void) { if (!sRunning) { sBase += now_us() - sStopAt; sRunning = 1; } }
+void tmr_reset(void) { sBase = sStopAt = now_us(); }
+uint32_t tmr_ms(void) { return (uint32_t) (elapsed_us() / 1000u); }
+void tmr_shutdown(void) { tmr_reset(); }
+uint32_t tmr_ticks(void) { return (uint32_t) elapsed_us(); }
+uint32_t tmr_ticks_per_sec(void) { return 1000000u; }
+uint32_t _tmr_val(void) { return (uint32_t) now_us(); }
+#else
 #include <stdlib.h>
 #include <libndls.h>
 
@@ -87,3 +112,5 @@ uint32_t tmr_ticks(void) {
 uint32_t tmr_ticks_per_sec(void) {
     return tmr_freq_sec;
 }
+
+#endif
