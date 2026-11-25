@@ -68,6 +68,11 @@ but for QEMU's `versatilepb` board, which has the same ARM926EJ-S core. Needs QE
 timer to the instruction count, so every "ms" figure is millions of ARM instructions. Runs are
 exactly repeatable.
 
+For a per-function breakdown, run `tools/armsim/profile.sh` from the same folder (needs
+QEMU's glib, which Homebrew installs with it). It builds a small QEMU plugin, runs the demo for
+100 and 400 ticks, and prints per-tick instructions and estimated ARM926 cycles for the hottest
+functions; add `--annotate NAME` to see one function instruction by instruction.
+
 Instruction counts are a good way to compare two builds, but they aren't time: they leave out
 cache misses, slow memory and multi-cycle instructions such as 64-bit multiplies. Also, the LCD
 blit costs nothing here.
