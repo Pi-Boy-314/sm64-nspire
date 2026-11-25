@@ -63,6 +63,6 @@ For ease of access, create a root-level folder named `sm64` on your calculator, 
 
 ## Step 5 - Finish
 
-You're done! Once you run the executable, a config and save file file will be generated, you can only edit the config file by transferring it back to your pc first, however.
+You're done! Once you run the executable, a config and save file will be generated. You can change the settings on the start screen of the game, or edit the config file on a computer (see [Settings](./README.md#settings)).
 
 Be aware there are a few hiccups when running the game now and then. If attempting to run the executable shows a compatiblity error, you'll need to restart your calc with the reset button on the back (This will require you to install ndless again, too). Also note that running the game with the usb cable still attached can impact performance negatively.

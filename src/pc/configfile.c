@@ -1,39 +1,32 @@
-// configfile.c - handles loading and saving the configuration options
+// configfile.c - loads and saves the settings file (CONFIG_FILE, plain text)
+//
+// The file is meant to be edited by hand on a computer as well as from the settings screen on
+// the calculator, so it explains every setting. It is only rewritten when it is missing, when it
+// comes from an older version of the game (no header line), or when the settings screen saves.
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <ctype.h>
 
 #include "configfile.h"
 
 #define ARRAY_LEN(arr) (sizeof(arr) / sizeof(arr[0]))
 
-enum ConfigOptionType {
-    CONFIG_TYPE_BOOL,
-    CONFIG_TYPE_UINT,
-    CONFIG_TYPE_FLOAT,
-};
-
-struct ConfigOption {
-    const char *name;
-    enum ConfigOptionType type;
-    union {
-        bool *boolValue;
-        unsigned int *uintValue;
-        float *floatValue;
-    };
-};
+#define CONFIG_HEADER "# Super Mario 64 for TI-Nspire: settings"
 
 /*
- *Config options and default values
+ * Settings and their defaults (the Balanced preset)
  */
 bool configDrawSky               = true;
 bool configFiltering             = false;
 bool configEnableFog             = false;
 bool config120pMode              = true;
-unsigned int configFrameskip     = 4; // worst case scenario, renders 1 out of every (X + 1) frames
+unsigned int configFrameskip     = 4; // at most this many frames in a row are skipped to keep game speed
+
+bool configCheatHealth           = false;
+bool configCheatLives            = false;
+bool configCheatMoonJump         = false;
 
 #ifdef BENCHMARK
 unsigned int configBenchDemo     = 0;   // which attract-mode demo to play (wraps if too large)
@@ -42,234 +35,292 @@ unsigned int configBenchTicks    = 600; // max ticks measured (stops earlier if 
 bool         configBenchDump     = false; // write a few frames as .ppm.tns files for visual diffs
 #endif
 
-// Keyboard mappings (scancode values)
-#ifdef TARGET_DOS
-// Allegro scancodes
-unsigned int configKeyA          = 12;
-unsigned int configKeyB          = 72;
-unsigned int configKeyStart      = 75;
-unsigned int configKeyR          = 116;
-unsigned int configKeyZ          = 11;
-unsigned int configKeyCUp        = 84;
-unsigned int configKeyCDown      = 85;
-unsigned int configKeyCLeft      = 82;
-unsigned int configKeyCRight     = 83;
-unsigned int configKeyStickUp    = 23;
-unsigned int configKeyStickDown  = 19;
-unsigned int configKeyStickLeft  =  1;
-unsigned int configKeyStickRight =  4;
-#else
-// DInput scancodes
-unsigned int configKeyA          = 0x26;
-unsigned int configKeyB          = 0x33;
-unsigned int configKeyStart      = 0x39;
-unsigned int configKeyR          = 0x36;
-unsigned int configKeyZ          = 0x25;
-unsigned int configKeyCUp        = 0x148;
-unsigned int configKeyCDown      = 0x150;
-unsigned int configKeyCLeft      = 0x14B;
-unsigned int configKeyCRight     = 0x14D;
-unsigned int configKeyStickUp    = 0x11;
-unsigned int configKeyStickDown  = 0x1F;
-unsigned int configKeyStickLeft  = 0x1E;
-unsigned int configKeyStickRight = 0x20;
-#endif
+/*
+ * Presets
+ */
+const char *const configPresetNames[PRESET_COUNT] = { "Performance", "Balanced", "Quality" };
 
-static const struct ConfigOption options[] = {
-    {.name = "draw_sky",          .type = CONFIG_TYPE_BOOL, .boolValue = &configDrawSky},
-    {.name = "texture_filtering", .type = CONFIG_TYPE_BOOL, .boolValue = &configFiltering},
-    {.name = "enable_fog",        .type = CONFIG_TYPE_BOOL, .boolValue = &configEnableFog},
-    {.name = "enable_120p_mode",  .type = CONFIG_TYPE_BOOL, .boolValue = &config120pMode},
-    {.name = "frameskip",         .type = CONFIG_TYPE_UINT, .uintValue = &configFrameskip},
-#ifdef BENCHMARK
-    {.name = "bench_demo",        .type = CONFIG_TYPE_UINT, .uintValue = &configBenchDemo},
-    {.name = "bench_warmup",      .type = CONFIG_TYPE_UINT, .uintValue = &configBenchWarmup},
-    {.name = "bench_ticks",       .type = CONFIG_TYPE_UINT, .uintValue = &configBenchTicks},
-    {.name = "bench_dump_frames", .type = CONFIG_TYPE_BOOL, .boolValue = &configBenchDump},
-#endif
-    {.name = "key_a",             .type = CONFIG_TYPE_UINT, .uintValue = &configKeyA},
-    {.name = "key_b",             .type = CONFIG_TYPE_UINT, .uintValue = &configKeyB},
-    {.name = "key_start",         .type = CONFIG_TYPE_UINT, .uintValue = &configKeyStart},
-    {.name = "key_r",             .type = CONFIG_TYPE_UINT, .uintValue = &configKeyR},
-    {.name = "key_z",             .type = CONFIG_TYPE_UINT, .uintValue = &configKeyZ},
-    {.name = "key_cup",           .type = CONFIG_TYPE_UINT, .uintValue = &configKeyCUp},
-    {.name = "key_cdown",         .type = CONFIG_TYPE_UINT, .uintValue = &configKeyCDown},
-    {.name = "key_cleft",         .type = CONFIG_TYPE_UINT, .uintValue = &configKeyCLeft},
-    {.name = "key_cright",        .type = CONFIG_TYPE_UINT, .uintValue = &configKeyCRight},
-    {.name = "key_stickup",       .type = CONFIG_TYPE_UINT, .uintValue = &configKeyStickUp},
-    {.name = "key_stickdown",     .type = CONFIG_TYPE_UINT, .uintValue = &configKeyStickDown},
-    {.name = "key_stickleft",     .type = CONFIG_TYPE_UINT, .uintValue = &configKeyStickLeft},
-    {.name = "key_stickright",    .type = CONFIG_TYPE_UINT, .uintValue = &configKeyStickRight},
+static const struct {
+    bool low_res;
+    unsigned int frameskip;
+    bool sky, fog;
+} presets[PRESET_COUNT] = {
+    [PRESET_PERFORMANCE] = { .low_res = true,  .frameskip = 6, .sky = false, .fog = false },
+    [PRESET_BALANCED]    = { .low_res = true,  .frameskip = 4, .sky = true,  .fog = false },
+    [PRESET_QUALITY]     = { .low_res = false, .frameskip = 2, .sky = true,  .fog = true  },
 };
 
-// Reads an entire line from a file (excluding the newline character) and returns an allocated string
-// Returns NULL if no lines could be read from the file
-static char *read_file_line(FILE *file) {
-    char *buffer;
-    size_t bufferSize = 8;
-    size_t offset = 0; // offset in buffer to write
-
-    buffer = malloc(bufferSize);
-    while (1) {
-        // Read a line from the file
-        if (fgets(buffer + offset, bufferSize - offset, file) == NULL) {
-            free(buffer);
-            return NULL; // Nothing could be read.
-        }
-        offset = strlen(buffer);
-        assert(offset > 0);
-
-        // If a newline was found, remove the trailing newline and exit
-        if (buffer[offset - 1] == '\n') {
-            buffer[offset - 1] = '\0';
-            break;
-        }
-
-        if (feof(file)) // EOF was reached
-            break;
-
-        // If no newline or EOF was reached, then the whole line wasn't read.
-        bufferSize *= 2; // Increase buffer size
-        buffer = realloc(buffer, bufferSize);
-        assert(buffer != NULL);
+void configfile_apply_preset(enum ConfigPreset preset) {
+    if (preset >= PRESET_COUNT) {
+        return;
     }
-
-    return buffer;
+    config120pMode = presets[preset].low_res;
+    configFrameskip = presets[preset].frameskip;
+    configDrawSky = presets[preset].sky;
+    configEnableFog = presets[preset].fog;
 }
 
-// Returns the position of the first non-whitespace character
-static char *skip_whitespace(char *str) {
-    while (isspace(*str))
-        str++;
-    return str;
-}
-
-// NULL-terminates the current whitespace-delimited word, and returns a pointer to the next word
-static char *word_split(char *str) {
-    // Precondition: str must not point to whitespace
-    assert(!isspace(*str));
-
-    // Find either the next whitespace char or end of string
-    while (!isspace(*str) && *str != '\0')
-        str++;
-    if (*str == '\0') // End of string
-        return str;
-
-    // Terminate current word
-    *(str++) = '\0';
-
-    // Skip whitespace to next word
-    return skip_whitespace(str);
-}
-
-// Splits a string into words, and stores the words into the 'tokens' array
-// 'maxTokens' is the length of the 'tokens' array
-// Returns the number of tokens parsed
-static unsigned int tokenize_string(char *str, int maxTokens, char **tokens) {
-    int count = 0;
-
-    str = skip_whitespace(str);
-    while (str[0] != '\0' && count < maxTokens) {
-        tokens[count] = str;
-        str = word_split(str);
-        count++;
+enum ConfigPreset configfile_current_preset(void) {
+    for (int p = 0; p < PRESET_COUNT; p++) {
+        if (config120pMode == presets[p].low_res && configFrameskip == presets[p].frameskip
+            && configDrawSky == presets[p].sky && configEnableFog == presets[p].fog) {
+            return (enum ConfigPreset) p;
+        }
     }
-    return count;
+    return PRESET_CUSTOM;
 }
 
-// Loads the config file specified by 'filename'
+/*
+ * The settings in the file, in the order they are written. help is written above each one.
+ */
+enum ConfigOptionType {
+    CONFIG_TYPE_BOOL,
+    CONFIG_TYPE_UINT,
+};
+
+struct ConfigOption {
+    const char *name;
+    enum ConfigOptionType type;
+    union {
+        bool *boolValue;
+        unsigned int *uintValue;
+    };
+    unsigned int max; // largest value accepted (numbers only)
+    const char *help;
+};
+
+static const struct ConfigOption options[] = {
+    {.name = "enable_120p_mode", .type = CONFIG_TYPE_BOOL, .boolValue = &config120pMode,
+     .help = "Resolution.\n"
+             "true: draw at 160x120 and stretch it to fill the screen. Much faster\n"
+             "(roughly 2 to 3 times), but blocky, and small text is hard to read.\n"
+             "false: full 320x240 resolution. Sharp, but much slower."},
+    {.name = "frameskip", .type = CONFIG_TYPE_UINT, .uintValue = &configFrameskip,
+     .max = FRAMESKIP_MAX,
+     .help = "Frame skipping: the most frames in a row the game may skip drawing to\n"
+             "keep running at its real speed (30 game frames per second).\n"
+             "0 draws every frame, but then the whole game runs in slow motion\n"
+             "whenever the calculator can't keep up. Higher values keep the game\n"
+             "closer to real speed, but movement gets jumpier.\n"
+             "A number from 0 to 30."},
+    {.name = "draw_sky", .type = CONFIG_TYPE_BOOL, .boolValue = &configDrawSky,
+     .help = "true: draw the sky backgrounds.\n"
+             "false: plain black sky. Faster, because the sky covers a large part\n"
+             "of the screen in many levels."},
+    {.name = "enable_fog", .type = CONFIG_TYPE_BOOL, .boolValue = &configEnableFog,
+     .help = "true: distance fog in the levels that use it (Bowser levels, for\n"
+             "example). Closer to the original look, but fogged areas draw more\n"
+             "slowly.\n"
+             "false: no fog."},
+#ifndef BENCHMARK
+    {.name = "cheat_infinite_health", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatHealth,
+     .help = "CHEATS. All are off (false) by default. They don't change your save\n"
+             "file, but stars and coins you collect while using them are saved as\n"
+             "usual.\n"
+             "\n"
+             "true: Mario's health refills every frame, so enemies, fire, falls and\n"
+             "running out of air can't hurt him. Bottomless pits still cost a life."},
+    {.name = "cheat_infinite_lives", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatLives,
+     .help = "true: the life counter stays at 99, so you never get a game over."},
+    {.name = "cheat_moon_jump", .type = CONFIG_TYPE_BOOL, .boolValue = &configCheatMoonJump,
+     .help = "true: hold A (the menu key) in the air and Mario keeps rising.\n"
+             "Let go to fall."},
+#endif
+#ifdef BENCHMARK
+    {.name = "bench_demo", .type = CONFIG_TYPE_UINT, .uintValue = &configBenchDemo, .max = 255,
+     .help = "Benchmark build only: which attract-mode demo to play (0 to 3)."},
+    {.name = "bench_warmup", .type = CONFIG_TYPE_UINT, .uintValue = &configBenchWarmup,
+     .max = 100000,
+     .help = "Benchmark build only: frames played before measuring starts."},
+    {.name = "bench_ticks", .type = CONFIG_TYPE_UINT, .uintValue = &configBenchTicks,
+     .max = 100000,
+     .help = "Benchmark build only: most frames measured (stops early when the\n"
+             "demo ends)."},
+    {.name = "bench_dump_frames", .type = CONFIG_TYPE_BOOL, .boolValue = &configBenchDump,
+     .help = "Benchmark build only: true saves frames 60, 240 and 420 as pictures\n"
+             "(.ppm.tns) for comparing versions."},
+#endif
+};
+
+static const char *const intro =
+    "#\n"
+    "# You can change these on the calculator: start the game, and the first\n"
+    "# screen shows the settings (arrow keys to change, Enter to save and play).\n"
+    "#\n"
+    "# Or edit this file on a computer: copy it from the calculator with the\n"
+    "# TI-Nspire software (or TI-Nspire Computer Link), open it in any plain text\n"
+    "# editor (Notepad, TextEdit, ...), save it, and send it back into the same\n"
+    "# folder as the game. Keep the name sm64_config.txt.tns.\n"
+    "#\n"
+    "# Each setting is one line: its name, a space, then its value. Lines that\n"
+    "# start with # are notes for you and are ignored. A missing or misspelt\n"
+    "# setting keeps its default value.\n"
+    "#\n";
+
+// "true"/"false" and a few friendlier spellings
+static bool parse_bool(const char *s, bool *out) {
+    static const char *const yes[] = { "true", "on", "yes", "1" };
+    static const char *const no[] = { "false", "off", "no", "0" };
+    for (unsigned int i = 0; i < ARRAY_LEN(yes); i++) {
+        if (strcmp(s, yes[i]) == 0) {
+            *out = true;
+            return true;
+        }
+        if (strcmp(s, no[i]) == 0) {
+            *out = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_uint(const char *s, unsigned int max, unsigned int *out) {
+    if (!isdigit((unsigned char) *s)) {
+        return false;
+    }
+    char *end;
+    const unsigned long v = strtoul(s, &end, 10);
+    if (*end != '\0') {
+        return false;
+    }
+    *out = v > max ? max : (unsigned int) v;
+    return true;
+}
+
+// Splits off the next word of *s (lower-cased), or returns NULL at the end of the line.
+static char *next_word(char **s) {
+    char *p = *s;
+    while (isspace((unsigned char) *p)) {
+        p++;
+    }
+    if (*p == '\0') {
+        return NULL;
+    }
+    char *word = p;
+    while (*p != '\0' && !isspace((unsigned char) *p)) {
+        *p = tolower((unsigned char) *p);
+        p++;
+    }
+    if (*p != '\0') {
+        *p++ = '\0';
+    }
+    *s = p;
+    return word;
+}
+
+// One line of the file. Comments and unknown settings (such as the key_* lines and
+// texture_filtering that older versions wrote) are ignored.
+static void parse_line(char *line, bool *has_header) {
+    char *p = line;
+    while (isspace((unsigned char) *p)) {
+        p++;
+    }
+    if (strncmp(p, CONFIG_HEADER, strlen(CONFIG_HEADER)) == 0) {
+        *has_header = true;
+    }
+    char *hash = strchr(p, '#');
+    if (hash != NULL) {
+        *hash = '\0';
+    }
+    const char *name = next_word(&p);
+    const char *value = next_word(&p);
+    if (name == NULL || value == NULL) {
+        return;
+    }
+    for (unsigned int i = 0; i < ARRAY_LEN(options); i++) {
+        const struct ConfigOption *o = &options[i];
+        if (strcmp(name, o->name) == 0) {
+            if (o->type == CONFIG_TYPE_BOOL) {
+                parse_bool(value, o->boolValue);
+            } else {
+                parse_uint(value, o->max, o->uintValue);
+            }
+            return;
+        }
+    }
+}
+
 void configfile_load(const char *filename) {
-    FILE *file;
-    char *line;
-
-    printf("Loading configuration from '%s'\n", filename);
-
-    file = fopen(filename, "r");
+    FILE *file = fopen(filename, "r");
     if (file == NULL) {
-        // Create a new config file and save defaults
-        printf("Config file '%s' not found. Creating it.\n", filename);
-        configfile_save(filename);
+        configfile_save(filename); // first start: write the defaults with their explanations
         return;
     }
 
-    // Go through each line in the file
-    while ((line = read_file_line(file)) != NULL) {
-        char *p = line;
-        char *tokens[2];
-        int numTokens;
-
-        while (isspace(*p))
-            p++;
-        numTokens = tokenize_string(p, 2, tokens);
-        if (numTokens != 0) {
-            if (numTokens == 2) {
-                const struct ConfigOption *option = NULL;
-
-                for (unsigned int i = 0; i < ARRAY_LEN(options); i++) {
-                    if (strcmp(tokens[0], options[i].name) == 0) {
-                        option = &options[i];
-                        break;
-                    }
-                }
-                if (option == NULL)
-                    printf("unknown option '%s'\n", tokens[0]);
-                else {
-                    switch (option->type) {
-                        case CONFIG_TYPE_BOOL:
-                            if (strcmp(tokens[1], "true") == 0)
-                                *option->boolValue = true;
-                            else if (strcmp(tokens[1], "false") == 0)
-                                *option->boolValue = false;
-                            break;
-                        case CONFIG_TYPE_UINT:
-                            sscanf(tokens[1], "%u", option->uintValue);
-                            break;
-                        case CONFIG_TYPE_FLOAT:
-                            sscanf(tokens[1], "%f", option->floatValue);
-                            break;
-                        default:
-                            assert(0); // bad type
-                    }
-                    printf("option: '%s', value: '%s'\n", tokens[0], tokens[1]);
-                }
-            } else
-                puts("error: expected value");
+    bool has_header = false;
+    char line[256];
+    while (fgets(line, sizeof(line), file) != NULL) {
+        const size_t len = strlen(line);
+        if (len == sizeof(line) - 1 && line[len - 1] != '\n') {
+            // longer than the buffer: parse the start, skip the rest
+            int c;
+            while ((c = fgetc(file)) != EOF && c != '\n') {
+            }
         }
-        free(line);
+        parse_line(line, &has_header);
     }
-
     fclose(file);
+
+    if (!has_header) {
+        configfile_save(filename); // file from an older version: same values, now explained
+    }
 }
 
-// Writes the config file to 'filename'
-void configfile_save(const char *filename) {
-    FILE *file;
-
-    printf("Saving configuration to '%s'\n", filename);
-
-    file = fopen(filename, "w");
-    if (file == NULL) {
-        // error
-        return;
+// writes text as comment lines ("# " in front, just "#" for empty lines)
+static void write_comment(FILE *file, const char *text) {
+    while (*text != '\0') {
+        const char *nl = strchr(text, '\n');
+        const size_t n = nl != NULL ? (size_t) (nl - text) : strlen(text);
+        fprintf(file, n > 0 ? "# %.*s\n" : "#\n", (int) n, text);
+        text += n + (nl != NULL);
     }
+}
+
+bool configfile_save(const char *filename) {
+    FILE *file = fopen(filename, "w");
+    if (file == NULL) {
+        return false;
+    }
+
+    fputs(CONFIG_HEADER "\n", file);
+    fputs(intro, file);
+
+    // preset table, made from the presets above so it can't go out of date
+    fputs("# Ready-made presets (on the settings screen: keys 1, 2 and 3):\n#\n", file);
+    for (int row = 0; row < 5; row++) {
+        static const char *const names[5] = { "", "enable_120p_mode", "frameskip", "draw_sky", "enable_fog" };
+        char line[128];
+        int n = snprintf(line, sizeof(line), "#   %-18s", names[row]);
+        for (int p = 0; p < PRESET_COUNT; p++) {
+            char cell[16];
+            switch (row) {
+                case 0: snprintf(cell, sizeof(cell), "%s", configPresetNames[p]); break;
+                case 1: snprintf(cell, sizeof(cell), "%s", presets[p].low_res ? "true" : "false"); break;
+                case 2: snprintf(cell, sizeof(cell), "%u", presets[p].frameskip); break;
+                case 3: snprintf(cell, sizeof(cell), "%s", presets[p].sky ? "true" : "false"); break;
+                default: snprintf(cell, sizeof(cell), "%s", presets[p].fog ? "true" : "false"); break;
+            }
+            n += snprintf(line + n, sizeof(line) - n, " %-12s", cell);
+        }
+        while (n > 0 && line[n - 1] == ' ') {
+            line[--n] = '\0';
+        }
+        fprintf(file, "%s\n", line);
+    }
+    fputs("#\n# Balanced is the default. Performance gives the most speed, Quality the\n"
+          "# best picture. Any mix of values works too.\n", file);
 
     for (unsigned int i = 0; i < ARRAY_LEN(options); i++) {
-        const struct ConfigOption *option = &options[i];
-
-        switch (option->type) {
-            case CONFIG_TYPE_BOOL:
-                fprintf(file, "%s %s\n", option->name, *option->boolValue ? "true" : "false");
-                break;
-            case CONFIG_TYPE_UINT:
-                fprintf(file, "%s %u\n", option->name, *option->uintValue);
-                break;
-            case CONFIG_TYPE_FLOAT:
-                fprintf(file, "%s %f\n", option->name, *option->floatValue);
-                break;
-            default:
-                assert(0); // unknown type
+        const struct ConfigOption *o = &options[i];
+        fputc('\n', file);
+        write_comment(file, o->help);
+        if (o->type == CONFIG_TYPE_BOOL) {
+            fprintf(file, "%s %s\n", o->name, *o->boolValue ? "true" : "false");
+        } else {
+            fprintf(file, "%s %u\n", o->name, *o->uintValue);
         }
     }
 
-    fclose(file);
+    const bool ok = !ferror(file);
+    return fclose(file) == 0 && ok;
 }

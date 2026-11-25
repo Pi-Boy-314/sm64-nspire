@@ -33,6 +33,7 @@
 #include "save_file.h"
 #include "sound_init.h"
 #include "thread6.h"
+#include "pc/cheats.h"
 
 u32 unused80339F10;
 s8 filler80339F1C[20];
@@ -1711,6 +1712,7 @@ s32 execute_mario_action(UNUSED struct Object *o) {
         gMarioState->marioObj->header.gfx.node.flags &= ~GRAPH_RENDER_INVISIBLE;
         mario_reset_bodystate(gMarioState);
         update_mario_inputs(gMarioState);
+        cheats_update(gMarioState);
         mario_handle_special_floors(gMarioState);
         mario_process_interactions(gMarioState);
 

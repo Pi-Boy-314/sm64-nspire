@@ -42,27 +42,7 @@ void nsp_main_loop(void (*run_one_game_iter)(void)) {
     return;
 #endif
     
-    // timer sanity check
-    uint32_t t0 = tmr_ms();
-    nio_printf("ms0 (should be zero): %lu\n", t0);
-    msleep(1000);
-    uint64_t t1 = tmr_ms();
-    nio_printf("ms delta (should be ~1000): %llu\n\n", t1 - t0);
-
-    // info
-    nio_puts("DEFAULT CONTROLS:\n"
-        "Start buttong: Enter\n"
-        "Analog stick: Touchpad\n"
-        "A button: menu\n"
-        "B button: del\n"
-        "Z trigger: doc\n"
-        "C buttons (up, right down, left): 8, 6, 2, 4, respectively\n\n");
-
-    nio_puts("Press ESC to exit, and CTRL for profiling\n");
-
-    nio_printf("Frameskip config: %u\nPress any key to continue...\n", configFrameskip);
-
-    wait_key_pressed();
+    // the controls and settings were shown by settings_menu_run() before the game started
     nio_free(console);
     
     tmr_reset();

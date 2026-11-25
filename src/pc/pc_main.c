@@ -13,11 +13,11 @@
 #include "fixed_pt.h"
 
 #include "configfile.h"
+#include "settings_menu.h"
 #include "timer.h"
 #include "profiling.h"
 
 
-#define CONFIG_FILE "sm64_config.txt.tns"
 
 OSMesg D_80339BEC;
 OSMesgQueue gSIEventMesgQueue;
@@ -61,10 +61,6 @@ void produce_one_frame(void) {
     prof_lap(PROF_LOGIC);
 }
 
-static void save_config(void) {
-    configfile_save(CONFIG_FILE);
-}
-
 static void on_fullscreen_changed(UNUSED bool is_now_fullscreen) {
 }
 
@@ -75,8 +71,12 @@ int main(UNUSED int argc, char *argv[]) {
 
     enable_relative_paths(argv);
 
+    // The config file is saved by the settings screen when something changed, not on exit,
+    // so notes and edits made to it on a computer are kept.
     configfile_load(CONFIG_FILE);
-    atexit(save_config);
+    if (!settings_menu_run()) {
+        return 0;
+    }
 
     wm_api = &gfx_nsp_api;
     rendering_api = &gfx_soft_api;
